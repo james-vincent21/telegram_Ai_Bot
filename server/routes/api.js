@@ -12,6 +12,7 @@ const Admin = require("../../models/Admin");
 const stockService = require("../../services/stockService");
 const woocommerce = require("../../services/woocommerce");
 const strings = require("../../bot/config/strings");
+const keyboards = require("../../bot/keyboards");
 const { bot } = require("../../bot/index");
 const { requireAdminAuth } = require("../middleware/auth");
 
@@ -545,6 +546,7 @@ router.post("/orders/:id/deliver", async (req, res) => {
       );
       await bot.telegram.sendMessage(order.telegramId, message, {
         parse_mode: "HTML",
+        ...keyboards.afterDeliveryKeyboard(),
       });
     } catch (tgErr) {
       console.error("Failed to send Telegram message:", tgErr.message);

@@ -2,111 +2,96 @@ const { Markup } = require("telegraf");
 const strings = require("./config/strings");
 
 /**
- * Main persistent reply keyboard
+ * Button colors (Bot API 9.4+, `style` field). Telegram apps released before
+ * Feb 2026 ignore it and show the normal button, so it is always safe to send.
+ *   primary = blue  (main / navigation actions)
+ *   success = green (buy, pay, confirm, increase)
+ *   danger  = red   (cancel, remove, decrease, sold out)
  */
+const BLUE = "primary";
+const GREEN = "success";
+const RED = "danger";
+
+/** Adds a color to any inline or reply keyboard button. */
+function paint(button, style) {
+  return style ? { ...button, style } : button;
+}
+
+const cb = (text, data, style) => paint(Markup.button.callback(text, data), style);
+const url = (text, link, style) => paint(Markup.button.url(text, link), style);
+const key = (text, style) => paint({ text }, style);
+
+function chunk(list, size) {
+  const rows = [];
+  for (let i = 0; i < list.length; i += size) rows.push(list.slice(i, i + size));
+  return rows;
+}
+
+/** Main persistent reply keyboard */
 function mainMenuKeyboard() {
   return Markup.keyboard([
-    [strings.buyProxyButton],
-    [strings.myOrdersButton, strings.supportButton],
+    [key(strings.buyProxyButton, GREEN)],
+    [key(strings.myOrdersButton, BLUE), key(strings.supportButton)],
   ])
     .resize()
+    .persistent()
     .placeholder("Pick an option below 👇");
 }
 
+/** Quick actions shown under the welcome message */
+function welcomeKeyboard() {
+  return Markup.inlineKeyboard([
+    [cb("⚡ Start Shopping", "new_buy", GREEN)],
+    [cb("🧾 My Orders", "open_orders", BLUE), cb("💬 Support", "open_support")],
+  ]);
+}
+
 /**
- * Inline keyboard displaying all dynamic categories from WooCommerce
- * @param {Array} categories - Array of category objects { id, name, count, emoji }
+ * Category picker
+ * @param {Array} categories - { id, name, count, emoji }
  */
 function categoriesKeyboard(categories) {
   const buttons = categories.map((cat) =>
-    Markup.button.callback(
-      `${cat.emoji} ${cat.name} · ${cat.count}`,
-      `cat_${cat.id}`,
-    ),
+    cb(`${cat.emoji} ${cat.name} · ${cat.count}`, `cat_${cat.id}`, BLUE),
   );
-
-  // Group 1 or 2 per row
-  const rows = [];
-  for (let i = 0; i < buttons.length; i += 2) {
-    rows.push(buttons.slice(i, i + 2));
-  }
-
-  // Refresh button
-  rows.push([
-    Markup.button.callback("🔄 Refresh", "refresh_categories"),
-  ]);
-
+  const rows = chunk(buttons, 2);
+  rows.push([cb("🔄 Refresh", "refresh_categories"), cb("🏠 Home", "go_home")]);
   return Markup.inlineKeyboard(rows);
 }
 
-/**
- * Inline keyboard for Products under a selected category
- * @param {Array} products - WooCommerce products
- * @param {number|string} categoryId
- */
+/** Products inside a category */
 function productsKeyboard(products, categoryId) {
   const buttons = products.map((prod) =>
-    Markup.button.callback(`✦ ${prod.name}`, `prod_${prod.id}_${categoryId}`),
+    cb(`✦ ${prod.name}`, `prod_${prod.id}_${categoryId}`, BLUE),
   );
-
-  // Group 2 per row
-  const rows = [];
-  for (let i = 0; i < buttons.length; i += 2) {
-    rows.push(buttons.slice(i, i + 2));
-  }
-
-  // Back button to category selection
+  const rows = chunk(buttons, 2);
   rows.push([
-    Markup.button.callback("‹ Categories", "back_to_cats"),
-    Markup.button.callback("🔄 Refresh", `cat_${categoryId}`),
+    cb("‹ Categories", "back_to_cats"),
+    cb("🔄 Refresh", `cat_${categoryId}`),
   ]);
-
   return Markup.inlineKeyboard(rows);
 }
 
-/**
- * Inline keyboard for Plan / Variation selection
- * @param {Array} variations - WooCommerce variations
- * @param {number|string} productId
- * @param {number|string} categoryId
- */
+/** Packages / variations: green = available, red = sold out */
 function variationsKeyboard(variations, productId, categoryId) {
   const rows = variations.map((v) => {
     if (v.inStock) {
       const stockBadge = v.stockQuantity ? ` · ${v.stockQuantity} left` : "";
-      return [
-        Markup.button.callback(
-          `⚡ ${v.name}  ·  ${v.price} ৳${stockBadge}`,
-          `var_${productId}_${v.id}`,
-        ),
-      ];
-    } else {
-      return [
-        Markup.button.callback(
-          `🚫 ${v.name}  ·  Sold out`,
-          `outofstock_${v.id}`,
-        ),
-      ];
+      return [cb(`⚡ ${v.name}  ·  ${v.price} ৳${stockBadge}`, `var_${productId}_${v.id}`, GREEN)];
     }
+    return [cb(`🚫 ${v.name}  ·  Sold out`, `outofstock_${v.id}`, RED)];
   });
-
-  // Back to product list under this category
   rows.push([
-    Markup.button.callback("‹ Back to Products", `cat_${categoryId}`),
+    cb("‹ Back to Products", `cat_${categoryId}`),
+    cb("🏠 Home", "go_home"),
   ]);
-
   return Markup.inlineKeyboard(rows);
 }
 
 /**
- * Inline keyboard for quantity selection.
+ * Quantity selector.
  * Callback data: qty_<productId>_<variationId>_<qty> (variationId 0 = simple product)
  *                buy_<productId>_<variationId>_<qty>
- * @param {number|string} productId
- * @param {number|string} variationId
- * @param {number} quantity - Currently selected quantity
- * @param {number} max - Highest quantity allowed
- * @param {string} totalLabel - Pre-formatted total, e.g. "30 BDT"
  */
 function quantityKeyboard(productId, variationId, quantity, max, totalLabel) {
   const vid = variationId || 0;
@@ -115,65 +100,76 @@ function quantityKeyboard(productId, variationId, quantity, max, totalLabel) {
   const presets = [1, 5, 10, 25, 50].filter((q) => q <= max);
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("➖", set(quantity - 1)),
-      Markup.button.callback(`🔢 ${quantity}`, set(quantity)),
-      Markup.button.callback("➕", set(quantity + 1)),
+      cb("➖", set(quantity - 1), quantity > 1 ? RED : undefined),
+      cb(`🔢 ${quantity}`, set(quantity)),
+      cb("➕", set(quantity + 1), quantity < max ? GREEN : undefined),
     ],
-    presets.map((q) =>
-      Markup.button.callback(q === quantity ? `✅ ${q}` : `×${q}`, set(q)),
-    ),
-    [
-      Markup.button.callback(
-        `🛒 Confirm Order · ${totalLabel}`,
-        `buy_${productId}_${vid}_${quantity}`,
-      ),
-    ],
-    [Markup.button.callback("‹ Back to Categories", "back_to_cats")],
+    presets.map((q) => cb(q === quantity ? `✅ ${q}` : `×${q}`, set(q), q === quantity ? BLUE : undefined)),
+    [cb(`🛒 Confirm Order · ${totalLabel}`, `buy_${productId}_${vid}_${quantity}`, GREEN)],
+    [cb("‹ Back to Categories", "back_to_cats")],
   ]);
 }
 
-/**
- * Inline keyboard for Order payment checkout
- * @param {string} checkoutUrl - WooCommerce checkout URL
- * @param {string} orderId
- * @param {number|string} amount
- * @param {string} currency
- */
+/** Checkout: pay (green) / cancel (red) */
 function orderPaymentKeyboard(checkoutUrl, orderId, amount, currency) {
   return Markup.inlineKeyboard([
-    [Markup.button.url(strings.payButtonText(amount, currency), checkoutUrl)],
-    [Markup.button.callback(strings.cancelButtonText, `cancel_order_${orderId}`)],
+    [url(strings.payButtonText(amount, currency), checkoutUrl, GREEN)],
+    [cb(strings.cancelButtonText, `cancel_order_${orderId}`, RED)],
   ]);
 }
 
-/**
- * Inline keyboard for user order history management
- * Only unpaid orders can be removed. Paid orders remain as a receipt/audit trail.
- * @param {number} pendingCount
- */
+/** Order history. Only unpaid orders can be removed. */
 function userOrdersKeyboard(pendingCount = 0) {
   const rows = [];
   if (pendingCount > 0) {
-    rows.push([
-      Markup.button.callback(
-        `🗑 Clear Unpaid Orders · ${pendingCount}`,
-        "user_clear_pending",
-      ),
-    ]);
+    rows.push([cb(`🗑 Clear Unpaid Orders · ${pendingCount}`, "user_clear_pending", RED)]);
   }
   rows.push([
-    Markup.button.callback("🔄 Refresh", "user_refresh_orders"),
-    Markup.button.callback("⚡ Buy Proxy", "back_to_cats"),
+    cb("🔄 Refresh", "user_refresh_orders"),
+    cb("⚡ Buy Proxy", "back_to_cats", GREEN),
   ]);
+  return Markup.inlineKeyboard(rows);
+}
+
+/**
+ * Under delivery / payment messages. These open NEW messages so the
+ * credentials message is never overwritten.
+ */
+function afterDeliveryKeyboard() {
+  return Markup.inlineKeyboard([
+    [cb("⚡ Buy Again", "new_buy", GREEN), cb("🧾 My Orders", "open_orders", BLUE)],
+    [cb("💬 Need help?", "open_support")],
+  ]);
+}
+
+/** Shown when something failed to load */
+function retryKeyboard(action) {
+  return Markup.inlineKeyboard([
+    [cb("🔄 Try Again", action, BLUE), cb("🏠 Home", "go_home")],
+  ]);
+}
+
+/** Support message actions */
+function supportKeyboard(contact, website = "https://ipdokan.com") {
+  const handle = String(contact || "").replace(/^@/, "");
+  const rows = [];
+  if (/^[A-Za-z0-9_]{4,}$/.test(handle)) {
+    rows.push([url("💬 Chat with Support", `https://t.me/${handle}`, GREEN)]);
+  }
+  rows.push([url("🌐 Visit Website", website, BLUE)]);
   return Markup.inlineKeyboard(rows);
 }
 
 module.exports = {
   mainMenuKeyboard,
+  welcomeKeyboard,
   categoriesKeyboard,
   productsKeyboard,
   variationsKeyboard,
   quantityKeyboard,
   orderPaymentKeyboard,
   userOrdersKeyboard,
+  afterDeliveryKeyboard,
+  retryKeyboard,
+  supportKeyboard,
 };

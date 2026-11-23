@@ -9,6 +9,7 @@ const paymentService = require("../../services/payment");
 const stockService = require("../../services/stockService");
 const notifyAdminService = require("../../services/notifyAdmin");
 const strings = require("../../bot/config/strings");
+const keyboards = require("../../bot/keyboards");
 const { bot } = require("../../bot/index");
 
 /**
@@ -41,7 +42,11 @@ async function sendDelivery(chatId, productName, variationName, credentials, ord
       quantity,
       chunks.length > 1 ? `${i + 1}/${chunks.length}` : "",
     );
-    await bot.telegram.sendMessage(chatId, text, { parse_mode: "HTML" });
+    const isLast = i === chunks.length - 1;
+    await bot.telegram.sendMessage(chatId, text, {
+      parse_mode: "HTML",
+      ...(isLast ? keyboards.afterDeliveryKeyboard() : {}),
+    });
   }
 }
 
@@ -229,6 +234,7 @@ router.post("/webhook/woocommerce", async (req, res) => {
           );
           await bot.telegram.sendMessage(telegramId, waitMsg, {
             parse_mode: "HTML",
+            ...keyboards.afterDeliveryKeyboard(),
           });
         } catch (tgErr) {
           console.error("Telegram notification error:", tgErr.message);
@@ -347,6 +353,7 @@ router.post("/webhook/payment-ipn", async (req, res) => {
         const outOfStockMsg = strings.outOfStockPaid(order.orderId);
         await bot.telegram.sendMessage(order.telegramId, outOfStockMsg, {
           parse_mode: "HTML",
+          ...keyboards.afterDeliveryKeyboard(),
         });
       } catch (tgErr) {
         console.error(`❌ [Fulfillment] Telegram send error:`, tgErr.message);

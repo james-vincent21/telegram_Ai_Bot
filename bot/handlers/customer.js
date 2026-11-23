@@ -38,21 +38,47 @@ async function trackUser(from) {
  */
 function registerCustomerHandlers(bot) {
   // /start command
-  bot.start(async (ctx) => {
+  async function sendWelcome(ctx) {
     await trackUser(ctx.from);
     await ctx.reply(strings.welcome(ctx.from.first_name), {
       parse_mode: "HTML",
       ...keyboards.mainMenuKeyboard(),
     });
+    await ctx.reply(strings.quickStart, {
+      parse_mode: "HTML",
+      ...keyboards.welcomeKeyboard(),
+    });
+  }
+
+  bot.start(sendWelcome);
+  bot.hears([strings.mainMenuButton, ...strings.legacyButtons.mainMenu], sendWelcome);
+
+  // Inline "Home": turn the current message back into the quick-start card
+  bot.action("go_home", async (ctx) => {
+    await ctx.answerCbQuery();
+    try {
+      return await ctx.editMessageText(strings.quickStart, {
+        parse_mode: "HTML",
+        ...keyboards.welcomeKeyboard(),
+      });
+    } catch (err) {
+      if (!/message is not modified/i.test(err.message)) throw err;
+    }
   });
 
-  // Main menu button
-  bot.hears([strings.mainMenuButton, ...strings.legacyButtons.mainMenu], async (ctx) => {
-    await trackUser(ctx.from);
-    await ctx.reply(strings.welcome(ctx.from.first_name), {
-      parse_mode: "HTML",
-      ...keyboards.mainMenuKeyboard(),
-    });
+  // Quick actions that open a NEW message (used under delivery messages,
+  // so the credentials are never overwritten)
+  bot.action("new_buy", async (ctx) => {
+    await ctx.answerCbQuery("Loading categories...");
+    return showAllCategories(ctx);
+  });
+  bot.action("open_orders", async (ctx) => {
+    await ctx.answerCbQuery();
+    return showMyOrders(ctx);
+  });
+  bot.action("open_support", async (ctx) => {
+    await ctx.answerCbQuery();
+    return showSupport(ctx);
   });
 
   // Step 1: User taps "Buy Proxy" or /buy -> Fetch & display ALL categories from WooCommerce
@@ -61,12 +87,14 @@ function registerCustomerHandlers(bot) {
 
   async function showAllCategories(ctx) {
     await trackUser(ctx.from);
+    ctx.sendChatAction("typing").catch(() => {});
     try {
       const categories = await woocommerce.getCategories();
       if (!categories || categories.length === 0) {
-        return ctx.reply(
-          "⚠️ No categories were found. Please try again in a moment.",
-        );
+        return ctx.reply(strings.loadError("categories", "No categories were found."), {
+          parse_mode: "HTML",
+          ...keyboards.retryKeyboard("new_buy"),
+        });
       }
       return ctx.reply(strings.selectCategory, {
         parse_mode: "HTML",
@@ -74,9 +102,10 @@ function registerCustomerHandlers(bot) {
       });
     } catch (err) {
       console.error("[Bot Categories Error]:", err.message);
-      return ctx.reply(
-        "❌ Unable to load categories. Please try again.",
-      );
+      return ctx.reply(strings.loadError("categories"), {
+        parse_mode: "HTML",
+        ...keyboards.retryKeyboard("new_buy"),
+      });
     }
   }
 
@@ -91,7 +120,10 @@ function registerCustomerHandlers(bot) {
         ...keyboards.categoriesKeyboard(categories),
       });
     } catch (err) {
-      return ctx.editMessageText("❌ Failed to load categories.");
+      return ctx.editMessageText(strings.loadError("categories"), {
+        parse_mode: "HTML",
+        ...keyboards.retryKeyboard("refresh_categories"),
+      });
     }
   });
 
@@ -115,7 +147,7 @@ function registerCustomerHandlers(bot) {
 
       if (!products || products.length === 0) {
         return ctx.editMessageText(
-          `⚠️ There are currently no products in <b>${catName}</b>.`,
+          `📭 <b>${catName}</b>\n\nThere are no products here right now. Please check another category.`,
           {
             parse_mode: "HTML",
             ...keyboards.productsKeyboard([], categoryId),
@@ -129,9 +161,10 @@ function registerCustomerHandlers(bot) {
       });
     } catch (err) {
       console.error("[Bot Category Products Error]:", err.message);
-      return ctx.editMessageText(
-        "❌ Unable to load products. Please try again.",
-      );
+      return ctx.editMessageText(strings.loadError("products"), {
+        parse_mode: "HTML",
+        ...keyboards.retryKeyboard(`cat_${categoryId}`),
+      });
     }
   });
 
@@ -158,15 +191,16 @@ function registerCustomerHandlers(bot) {
       });
     } catch (err) {
       console.error("[Bot Product Details Error]:", err.message);
-      return ctx.editMessageText(
-        "❌ Unable to load packages. Please try again.",
-      );
+      return ctx.editMessageText(strings.loadError("packages"), {
+        parse_mode: "HTML",
+        ...keyboards.retryKeyboard(`prod_${productId}_${categoryId}`),
+      });
     }
   });
 
   // Step 4: Out of stock click
   bot.action(/^outofstock_(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery("⚠️ This package is currently out of stock!", {
+    await ctx.answerCbQuery("😔 This package is sold out right now. Please pick another one.", {
       show_alert: true,
     });
   });
@@ -328,9 +362,10 @@ function registerCustomerHandlers(bot) {
       );
     } catch (err) {
       console.error("[OrderCreation Error]:", err.message);
-      return ctx.editMessageText(
-        `❌ Unable to create your order: ${err.message}\n\nPlease try again in a moment.`,
-      );
+      return ctx.editMessageText(strings.orderCreateError, {
+        parse_mode: "HTML",
+        ...keyboards.retryKeyboard(`buy_${ctx.match[1]}_${ctx.match[2]}_${ctx.match[3]}`),
+      });
     }
   });
 
@@ -361,6 +396,7 @@ function registerCustomerHandlers(bot) {
 
   async function showMyOrders(ctx) {
     await trackUser(ctx.from);
+    ctx.sendChatAction("typing").catch(() => {});
     const view = await getOrdersView(ctx.from.id);
     return ctx.reply(view.text, {
       parse_mode: "HTML",
@@ -371,10 +407,15 @@ function registerCustomerHandlers(bot) {
   bot.action("user_refresh_orders", async (ctx) => {
     await ctx.answerCbQuery("Refreshing orders...");
     const view = await getOrdersView(ctx.from.id);
-    return ctx.editMessageText(view.text, {
-      parse_mode: "HTML",
-      ...keyboards.userOrdersKeyboard(view.pendingCount),
-    });
+    try {
+      return await ctx.editMessageText(view.text, {
+        parse_mode: "HTML",
+        ...keyboards.userOrdersKeyboard(view.pendingCount),
+      });
+    } catch (err) {
+      // Nothing changed since the last refresh
+      if (!/message is not modified/i.test(err.message)) throw err;
+    }
   });
 
   // Cancels the WooCommerce orders too, so unpaid carts do not remain active
@@ -469,10 +510,28 @@ function registerCustomerHandlers(bot) {
   async function showSupport(ctx) {
     await trackUser(ctx.from);
     const supportContact = process.env.SUPPORT_CONTACT || "@ipdokan";
-    return ctx.reply(strings.support(supportContact), { parse_mode: "HTML" });
+    return ctx.reply(strings.support(supportContact), {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      ...keyboards.supportKeyboard(supportContact),
+    });
   }
+}
+
+/**
+ * Friendly reply for messages the bot doesn't understand.
+ * Register this LAST, after every other handler.
+ */
+function registerFallbackHandler(bot) {
+  bot.on("text", async (ctx) => {
+    await ctx.reply(strings.unknownMessage(ctx.from.first_name), {
+      parse_mode: "HTML",
+      ...keyboards.welcomeKeyboard(),
+    });
+  });
 }
 
 module.exports = {
   registerCustomerHandlers,
+  registerFallbackHandler,
 };

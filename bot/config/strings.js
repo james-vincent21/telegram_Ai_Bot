@@ -27,10 +27,24 @@ module.exports = {
     `<i>Premium proxies, delivered right here in Telegram</i>\n` +
     `${LINE}\n\n` +
     `<blockquote>⚡ <b>Instant delivery</b>: credentials arrive a few seconds after you pay\n` +
-    `🌍 <b>Global IPs</b>: residential, ISP & datacenter\n` +
+    `🛡 <b>Fast & reliable</b>: premium high-speed proxies\n` +
     `📶 <b>Flexible plans</b>: pay per GB or per IP\n` +
     `🔐 <b>Secure checkout</b>: bKash · Nagad · Rocket · Binance</blockquote>\n\n` +
     `👇 Tap <b>⚡ Buy Proxy</b> to see the packages`,
+
+  quickStart:
+    `🚀 <b>Quick start</b>\n` +
+    `<i>Choose what you want to do:</i>`,
+  unknownMessage: (name) =>
+    `🤔 Sorry ${name || "there"}, I didn't understand that.\n\n` +
+    `Use the buttons below or the menu at the bottom of the chat.\n` +
+    `<i>Tip: type /buy to start shopping right away.</i>`,
+  loadError: (what = "data", detail = "") =>
+    `😕 <b>Couldn't load ${what}</b>\n\n` +
+    `${detail ? `${detail} ` : ""}Our store might be busy. Tap <b>🔄 Try Again</b> in a moment.`,
+  orderCreateError:
+    `😕 <b>Couldn't create your order</b>\n\n` +
+    `Nothing was charged. Tap <b>🔄 Try Again</b>, and if it keeps failing, type /support.`,
 
   selectCategory:
     `🗂 <b>Choose a category</b>\n${steps(1)}\n${LINE}\n\n` +
@@ -106,10 +120,9 @@ module.exports = {
 
   support: (contact = "@ipdokan") =>
     `💬 <b>Help & Support</b>\n${LINE}\n\n` +
-    `Problem with a proxy or a payment? We can help.\n\n` +
+    `Problem with a proxy or a payment? Tap a button below to reach us.\n\n` +
     `<blockquote>👤 <b>Telegram:</b> ${contact}\n` +
-    `🌐 <b>Website:</b> https://ipdokan.com\n` +
-    `🕘 <b>Usually replies:</b> within minutes</blockquote>\n\n` +
+    `🌐 <b>Website:</b> https://ipdokan.com</blockquote>\n\n` +
     `📝 <i>Include your <b>Order ID</b> so we can help faster.</i>`,
 
   adminStats: (stats) =>

@@ -1,7 +1,7 @@
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const mongoose = require('mongoose');
-const { registerCustomerHandlers } = require('./handlers/customer');
+const { registerCustomerHandlers, registerFallbackHandler } = require('./handlers/customer');
 const { registerAdminHandlers } = require('./handlers/admin');
 const notifyAdminService = require('../services/notifyAdmin');
 
@@ -31,6 +31,7 @@ bot.catch((err, ctx) => {
 // Register bot modules
 registerCustomerHandlers(bot);
 registerAdminHandlers(bot);
+registerFallbackHandler(bot); // must stay last
 
 async function launchBot() {
   // Connect to MongoDB if not already connected
@@ -48,6 +49,19 @@ async function launchBot() {
   try {
     const botInfo = await bot.telegram.getMe();
     console.log(`🤖 [Telegram Bot] Authorized as @${botInfo.username} (${botInfo.id})`);
+
+    // Command list shown in Telegram's "Menu" button and when typing "/"
+    try {
+      await bot.telegram.setMyCommands([
+        { command: 'start', description: '🏠 Home & main menu' },
+        { command: 'buy', description: '⚡ Buy a proxy' },
+        { command: 'myorders', description: '🧾 My orders & credentials' },
+        { command: 'support', description: '💬 Help & support' },
+      ]);
+      await bot.telegram.setChatMenuButton({ menuButton: { type: 'commands' } });
+    } catch (err) {
+      console.warn('⚠️ [Telegram Bot] Could not set command menu:', err.message);
+    }
 
     // In local development, launch via Long Polling
     bot.launch({
