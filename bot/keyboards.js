@@ -21,6 +21,19 @@ const cb = (text, data, style) => paint(Markup.button.callback(text, data), styl
 const url = (text, link, style) => paint(Markup.button.url(text, link), style);
 const key = (text, style) => paint({ text }, style);
 
+/**
+ * Standard navigation row on every screen:
+ *   ‹ Back (blue) · 🏠 Home (green) · ✖️ Exit (red)
+ * @param {string} [backAction] - callback for Back; omit to hide it
+ */
+function navRow(backAction) {
+  const row = [];
+  if (backAction) row.push(cb("‹ Back", backAction, BLUE));
+  row.push(cb("🏠 Home", "go_home", GREEN));
+  row.push(cb("✖️ Exit", "nav_exit", RED));
+  return row;
+}
+
 function chunk(list, size) {
   const rows = [];
   for (let i = 0; i < list.length; i += size) rows.push(list.slice(i, i + size));
@@ -43,6 +56,7 @@ function welcomeKeyboard() {
   return Markup.inlineKeyboard([
     [cb("⚡ Start Shopping", "new_buy", GREEN)],
     [cb("🧾 My Orders", "open_orders", BLUE), cb("💬 Support", "open_support")],
+    [cb("✖️ Exit", "nav_exit", RED)],
   ]);
 }
 
@@ -55,7 +69,8 @@ function categoriesKeyboard(categories) {
     cb(`${cat.emoji} ${cat.name} · ${cat.count}`, `cat_${cat.id}`, BLUE),
   );
   const rows = chunk(buttons, 2);
-  rows.push([cb("🔄 Refresh", "refresh_categories"), cb("🏠 Home", "go_home")]);
+  rows.push([cb("🔄 Refresh Categories", "refresh_categories")]);
+  rows.push(navRow("go_home"));
   return Markup.inlineKeyboard(rows);
 }
 
@@ -65,10 +80,8 @@ function productsKeyboard(products, categoryId) {
     cb(`✦ ${prod.name}`, `prod_${prod.id}_${categoryId}`, BLUE),
   );
   const rows = chunk(buttons, 2);
-  rows.push([
-    cb("‹ Categories", "back_to_cats"),
-    cb("🔄 Refresh", `cat_${categoryId}`),
-  ]);
+  rows.push([cb("🔄 Refresh Products", `cat_${categoryId}`)]);
+  rows.push(navRow("back_to_cats"));
   return Markup.inlineKeyboard(rows);
 }
 
@@ -77,25 +90,26 @@ function variationsKeyboard(variations, productId, categoryId) {
   const rows = variations.map((v) => {
     if (v.inStock) {
       const stockBadge = v.stockQuantity ? ` · ${v.stockQuantity} left` : "";
-      return [cb(`⚡ ${v.name}  ·  ${v.price} ৳${stockBadge}`, `var_${productId}_${v.id}`, GREEN)];
+      return [cb(`⚡ ${v.name}  ·  ${v.price} ৳${stockBadge}`, `var_${productId}_${v.id}_${categoryId}`, GREEN)];
     }
     return [cb(`🚫 ${v.name}  ·  Sold out`, `outofstock_${v.id}`, RED)];
   });
-  rows.push([
-    cb("‹ Back to Products", `cat_${categoryId}`),
-    cb("🏠 Home", "go_home"),
-  ]);
+  rows.push(navRow(`cat_${categoryId}`));
   return Markup.inlineKeyboard(rows);
 }
 
 /**
  * Quantity selector.
- * Callback data: qty_<productId>_<variationId>_<qty> (variationId 0 = simple product)
- *                buy_<productId>_<variationId>_<qty>
+ * Callback data: qty_<productId>_<variationId>_<qty>_<categoryId> (variationId 0 = simple product)
+ *                buy_<productId>_<variationId>_<qty>_<categoryId>
+ * categoryId 0 = unknown (old buttons), Back then goes to the category list.
  */
-function quantityKeyboard(productId, variationId, quantity, max, totalLabel) {
+function quantityKeyboard(productId, variationId, quantity, max, totalLabel, categoryId = 0) {
   const vid = variationId || 0;
-  const set = (q) => `qty_${productId}_${vid}_${Math.min(max, Math.max(1, q))}`;
+  const cid = categoryId || 0;
+  const set = (q) => `qty_${productId}_${vid}_${Math.min(max, Math.max(1, q))}_${cid}`;
+  // Back: packages list (variable product) → products list (simple product) → categories
+  const back = !cid ? "back_to_cats" : vid ? `prod_${productId}_${cid}` : `cat_${cid}`;
 
   const presets = [1, 5, 10, 25, 50].filter((q) => q <= max);
   return Markup.inlineKeyboard([
@@ -105,8 +119,8 @@ function quantityKeyboard(productId, variationId, quantity, max, totalLabel) {
       cb("➕", set(quantity + 1), quantity < max ? GREEN : undefined),
     ],
     presets.map((q) => cb(q === quantity ? `✅ ${q}` : `×${q}`, set(q), q === quantity ? BLUE : undefined)),
-    [cb(`🛒 Confirm Order · ${totalLabel}`, `buy_${productId}_${vid}_${quantity}`, GREEN)],
-    [cb("‹ Back to Categories", "back_to_cats")],
+    [cb(`🛒 Confirm Order · ${totalLabel}`, `buy_${productId}_${vid}_${quantity}_${cid}`, GREEN)],
+    navRow(back),
   ]);
 }
 
@@ -115,6 +129,7 @@ function orderPaymentKeyboard(checkoutUrl, orderId, amount, currency) {
   return Markup.inlineKeyboard([
     [url(strings.payButtonText(amount, currency), checkoutUrl, GREEN)],
     [cb(strings.cancelButtonText, `cancel_order_${orderId}`, RED)],
+    [cb("🏠 Home", "go_home", GREEN)],
   ]);
 }
 
@@ -128,6 +143,7 @@ function userOrdersKeyboard(pendingCount = 0) {
     cb("🔄 Refresh", "user_refresh_orders"),
     cb("⚡ Buy Proxy", "back_to_cats", GREEN),
   ]);
+  rows.push(navRow());
   return Markup.inlineKeyboard(rows);
 }
 
@@ -145,8 +161,14 @@ function afterDeliveryKeyboard() {
 /** Shown when something failed to load */
 function retryKeyboard(action) {
   return Markup.inlineKeyboard([
-    [cb("🔄 Try Again", action, BLUE), cb("🏠 Home", "go_home")],
+    [cb("🔄 Try Again", action, BLUE)],
+    navRow(),
   ]);
+}
+
+/** Just the navigation row (e.g. under "sold out" / "not found" messages) */
+function navKeyboard(backAction) {
+  return Markup.inlineKeyboard([navRow(backAction)]);
 }
 
 /** Support message actions */
@@ -157,6 +179,7 @@ function supportKeyboard(contact, website = "https://ipdokan.com") {
     rows.push([url("💬 Chat with Support", `https://t.me/${handle}`, GREEN)]);
   }
   rows.push([url("🌐 Visit Website", website, BLUE)]);
+  rows.push(navRow());
   return Markup.inlineKeyboard(rows);
 }
 
@@ -172,4 +195,5 @@ module.exports = {
   afterDeliveryKeyboard,
   retryKeyboard,
   supportKeyboard,
+  navKeyboard,
 };

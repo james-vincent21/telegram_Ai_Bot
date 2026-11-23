@@ -2,6 +2,7 @@ const Order = require("../../models/Order");
 const User = require("../../models/User");
 const strings = require("../config/strings");
 const keyboards = require("../keyboards");
+const animator = require("../stepAnimator");
 const woocommerce = require("../../services/woocommerce");
 
 const MAX_QUANTITY = 50;
@@ -37,6 +38,9 @@ async function trackUser(from) {
  * @param {import('telegraf').Telegraf} bot
  */
 function registerCustomerHandlers(bot) {
+  // Any button tap stops that message's step animation before the handler edits it
+  bot.on("callback_query", animator.stopOnTap);
+
   // /start command
   async function sendWelcome(ctx) {
     await trackUser(ctx.from);
@@ -63,6 +67,17 @@ function registerCustomerHandlers(bot) {
       });
     } catch (err) {
       if (!/message is not modified/i.test(err.message)) throw err;
+    }
+  });
+
+  // Exit: close the current menu message
+  bot.action("nav_exit", async (ctx) => {
+    await ctx.answerCbQuery("👋 Closed");
+    try {
+      await ctx.deleteMessage();
+    } catch {
+      // Older than 48h or already gone: replace it with a short goodbye instead
+      await ctx.editMessageText(strings.exitMessage, { parse_mode: "HTML" }).catch(() => {});
     }
   });
 
@@ -96,10 +111,7 @@ function registerCustomerHandlers(bot) {
           ...keyboards.retryKeyboard("new_buy"),
         });
       }
-      return ctx.reply(strings.selectCategory, {
-        parse_mode: "HTML",
-        ...keyboards.categoriesKeyboard(categories),
-      });
+      return animator.reply(ctx, strings.selectCategory, keyboards.categoriesKeyboard(categories));
     } catch (err) {
       console.error("[Bot Categories Error]:", err.message);
       return ctx.reply(strings.loadError("categories"), {
@@ -115,11 +127,9 @@ function registerCustomerHandlers(bot) {
     try {
       const force = ctx.match === "refresh_categories";
       const categories = await woocommerce.getCategories(force);
-      return ctx.editMessageText(strings.selectCategory, {
-        parse_mode: "HTML",
-        ...keyboards.categoriesKeyboard(categories),
-      });
+      return await animator.edit(ctx, strings.selectCategory, keyboards.categoriesKeyboard(categories));
     } catch (err) {
+      if (/message is not modified/i.test(err.message)) return;
       return ctx.editMessageText(strings.loadError("categories"), {
         parse_mode: "HTML",
         ...keyboards.retryKeyboard("refresh_categories"),
@@ -155,10 +165,7 @@ function registerCustomerHandlers(bot) {
         );
       }
 
-      return ctx.editMessageText(strings.selectProduct(catName), {
-        parse_mode: "HTML",
-        ...keyboards.productsKeyboard(products, categoryId),
-      });
+      return await animator.edit(ctx, strings.selectProduct(catName), keyboards.productsKeyboard(products, categoryId));
     } catch (err) {
       console.error("[Bot Category Products Error]:", err.message);
       return ctx.editMessageText(strings.loadError("products"), {
@@ -182,13 +189,14 @@ function registerCustomerHandlers(bot) {
 
       if (!variations || variations.length === 0) {
         // Simple product or no variations -> ask for quantity
-        return showQuantity(ctx, productId, 0, 1, { product });
+        return await showQuantity(ctx, productId, 0, 1, { product }, categoryId);
       }
 
-      return ctx.editMessageText(strings.selectPlan(product.name), {
-        parse_mode: "HTML",
-        ...keyboards.variationsKeyboard(variations, productId, categoryId),
-      });
+      return await animator.edit(
+        ctx,
+        strings.selectPlan(product.name),
+        keyboards.variationsKeyboard(variations, productId, categoryId),
+      );
     } catch (err) {
       console.error("[Bot Product Details Error]:", err.message);
       return ctx.editMessageText(strings.loadError("packages"), {
@@ -238,44 +246,61 @@ function registerCustomerHandlers(bot) {
   }
 
   // Step 5: show the quantity selector for a package
-  async function showQuantity(ctx, productId, variationId, quantity, prefetched) {
+  // Where "Back" goes from the quantity / sold-out screens
+  function backFrom(productId, variationId, categoryId) {
+    if (!categoryId || categoryId === "0") return "back_to_cats";
+    return variationId && variationId !== "0" ? `prod_${productId}_${categoryId}` : `cat_${categoryId}`;
+  }
+
+  async function showQuantity(ctx, productId, variationId, quantity, prefetched, categoryId = 0) {
     const item = await resolveItem(productId, variationId, prefetched);
+    const back = backFrom(productId, String(variationId || 0), String(categoryId || 0));
     if (!item) {
-      return ctx.editMessageText("❌ The selected package could not be found.");
+      return ctx.editMessageText("😕 <b>This package could not be found.</b>\n\nPlease pick another one.", {
+        parse_mode: "HTML",
+        ...keyboards.navKeyboard(back),
+      });
     }
     if (!item.inStock) {
-      return ctx.editMessageText(strings.outOfStockAlert, { parse_mode: "HTML" });
+      return ctx.editMessageText(strings.outOfStockAlert, {
+        parse_mode: "HTML",
+        ...keyboards.navKeyboard(back),
+      });
     }
     const max = maxQuantity(item);
     const qty = Math.min(max, Math.max(1, quantity));
-    return ctx.editMessageText(
+    return animator.edit(
+      ctx,
       strings.selectQuantity(item.product.name, item.name, item.price, qty, "BDT"),
-      {
-        parse_mode: "HTML",
-        ...keyboards.quantityKeyboard(
-          productId,
-          variationId,
-          qty,
-          max,
-          `${Math.round(item.price * qty * 100) / 100} BDT`,
-        ),
-      },
+      keyboards.quantityKeyboard(
+        productId,
+        variationId,
+        qty,
+        max,
+        `${Math.round(item.price * qty * 100) / 100} BDT`,
+        categoryId,
+      ),
     );
   }
 
-  // User picks a Variation / Package: var_<productId>_<variationId>
-  bot.action(/^var_(\d+)_(\d+)$/, async (ctx) => {
+  // User picks a Variation / Package: var_<productId>_<variationId>[_<categoryId>]
+  // (the categoryId part is optional so buttons from older messages keep working)
+  bot.action(/^var_(\d+)_(\d+)(?:_(\d+))?$/, async (ctx) => {
     await ctx.answerCbQuery();
+    const categoryId = ctx.match[3] || 0;
     try {
-      return await showQuantity(ctx, ctx.match[1], ctx.match[2], 1);
+      return await showQuantity(ctx, ctx.match[1], ctx.match[2], 1, undefined, categoryId);
     } catch (err) {
       console.error("[Quantity Error]:", err.message);
-      return ctx.editMessageText("❌ Unable to load the package. Please try again.");
+      return ctx.editMessageText(strings.loadError("the package"), {
+        parse_mode: "HTML",
+        ...keyboards.retryKeyboard(ctx.match[0]),
+      });
     }
   });
 
-  // Quantity stepper: qty_<productId>_<variationId>_<qty>
-  bot.action(/^qty_(\d+)_(\d+)_(\d+)$/, async (ctx) => {
+  // Quantity stepper: qty_<productId>_<variationId>_<qty>[_<categoryId>]
+  bot.action(/^qty_(\d+)_(\d+)_(\d+)(?:_(\d+))?$/, async (ctx) => {
     await ctx.answerCbQuery();
     try {
       return await showQuantity(
@@ -283,6 +308,8 @@ function registerCustomerHandlers(bot) {
         ctx.match[1],
         ctx.match[2],
         parseInt(ctx.match[3], 10),
+        undefined,
+        ctx.match[4] || 0,
       );
     } catch (err) {
       // Telegram rejects edits that change nothing (e.g. tapping the counter)
@@ -292,19 +319,26 @@ function registerCustomerHandlers(bot) {
     }
   });
 
-  // Confirm: buy_<productId>_<variationId>_<qty> -> create order + payment link
-  bot.action(/^buy_(\d+)_(\d+)_(\d+)$/, async (ctx) => {
+  // Confirm: buy_<productId>_<variationId>_<qty>[_<categoryId>] -> create order + payment link
+  bot.action(/^buy_(\d+)_(\d+)_(\d+)(?:_(\d+))?$/, async (ctx) => {
     await ctx.answerCbQuery("Generating payment link...");
     const productId = ctx.match[1];
     const variationId = ctx.match[2] === "0" ? null : ctx.match[2];
+    const back = backFrom(productId, ctx.match[2], ctx.match[4] || "0");
 
     try {
       const item = await resolveItem(productId, variationId);
       if (!item) {
-        return ctx.editMessageText("❌ The selected package could not be found.");
+        return ctx.editMessageText("😕 <b>This package could not be found.</b>\n\nPlease pick another one.", {
+          parse_mode: "HTML",
+          ...keyboards.navKeyboard(back),
+        });
       }
       if (!item.inStock) {
-        return ctx.editMessageText(strings.outOfStockAlert, { parse_mode: "HTML" });
+        return ctx.editMessageText(strings.outOfStockAlert, {
+          parse_mode: "HTML",
+          ...keyboards.navKeyboard(back),
+        });
       }
 
       const quantity = Math.min(
@@ -348,23 +382,16 @@ function registerCustomerHandlers(bot) {
         status: "pending",
       });
 
-      return ctx.editMessageText(
+      return await animator.edit(
+        ctx,
         strings.orderSummary(product.name, item.name, total, "BDT", orderId, quantity),
-        {
-          parse_mode: "HTML",
-          ...keyboards.orderPaymentKeyboard(
-            wooResult.paymentUrl,
-            orderId,
-            total,
-            "BDT",
-          ),
-        },
+        keyboards.orderPaymentKeyboard(wooResult.paymentUrl, orderId, total, "BDT"),
       );
     } catch (err) {
       console.error("[OrderCreation Error]:", err.message);
       return ctx.editMessageText(strings.orderCreateError, {
         parse_mode: "HTML",
-        ...keyboards.retryKeyboard(`buy_${ctx.match[1]}_${ctx.match[2]}_${ctx.match[3]}`),
+        ...keyboards.retryKeyboard(ctx.match[0]),
       });
     }
   });

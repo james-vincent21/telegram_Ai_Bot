@@ -3,10 +3,12 @@
 const LINE = "━━━━━━━━━━━━━━━━━━━━";
 const THIN = "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈";
 
-/** Checkout progress: ●━━●━━○━━○ */
-function steps(current, labels = ["Category", "Product", "Package", "Quantity"]) {
-  const track = labels.map((_, i) => (i < current ? "●" : "○")).join("━━");
-  return `<code>${track}</code>  <i>Step ${current}/${labels.length} · ${labels[current - 1]}</i>`;
+/**
+ * Checkout progress placeholder. bot/stepAnimator.js turns it into the
+ * animated 🟢 ━ 🟢 ━ ⚪️ ━ 🔴 ━ 🔴 bar.
+ */
+function steps(current) {
+  return `%%STEPS:${current}%%`;
 }
 
 module.exports = {
@@ -32,6 +34,8 @@ module.exports = {
     `🔐 <b>Secure checkout</b>: bKash · Nagad · Rocket · Binance</blockquote>\n\n` +
     `👇 Tap <b>⚡ Buy Proxy</b> to see the packages`,
 
+  exitMessage:
+    `👋 <b>Menu closed</b>\n\nType /start or tap <b>⚡ Buy Proxy</b> whenever you need us again.`,
   quickStart:
     `🚀 <b>Quick start</b>\n` +
     `<i>Choose what you want to do:</i>`,
@@ -47,16 +51,16 @@ module.exports = {
     `Nothing was charged. Tap <b>🔄 Try Again</b>, and if it keeps failing, type /support.`,
 
   selectCategory:
-    `🗂 <b>Choose a category</b>\n${steps(1)}\n${LINE}\n\n` +
-    `Pick the type of proxy you need. The number shows how many products are in each category.`,
+    `🗂 <b>CHOOSE A CATEGORY</b>\n<i>Start here</i>\n\n${steps(1)}\n${LINE}\n\n` +
+    `Pick the type of proxy you need.\n<i>The number shows how many products are in each category.</i>`,
   selectProduct: (categoryName) =>
-    `🏷 <b>${categoryName}</b>\n${steps(2)}\n${LINE}\n\n` +
+    `🏷 <b>CHOOSE A PRODUCT</b>\n<i>in ${categoryName}</i>\n\n${steps(2)}\n${LINE}\n\n` +
     `Choose a brand or product:`,
   selectPlan: (productName) =>
-    `📦 <b>${productName}</b>\n${steps(3)}\n${LINE}\n\n` +
-    `Choose a package. <i>⚡ = in stock · 🚫 = sold out</i>`,
+    `📦 <b>CHOOSE A PACKAGE</b>\n<i>for ${productName}</i>\n\n${steps(3)}\n${LINE}\n\n` +
+    `Choose a package. <i>🟢 green = in stock · 🔴 red = sold out</i>`,
   selectQuantity: (productName, planLabel, unitPrice, quantity, currency) =>
-    `🛒 <b>${productName}</b>\n${steps(4)}\n${LINE}\n\n` +
+    `🔢 <b>CHOOSE QUANTITY</b>\n<i>${productName}</i>\n\n${steps(4)}\n${LINE}\n\n` +
     `📦 <b>Package:</b> ${planLabel}\n` +
     `💵 <b>Unit price:</b> ${unitPrice} ${currency}\n\n` +
     `<blockquote>🔢 <b>Quantity:</b> ${quantity}\n` +
@@ -65,7 +69,7 @@ module.exports = {
     `<i>Use ➖ / ➕ or a preset, then tap Confirm.</i>`,
 
   orderSummary: (brandName, planLabel, price, currency, orderId, quantity = 1) =>
-    `🧾 <b>Order Ready</b>\n${LINE}\n\n` +
+    `💳 <b>COMPLETE PAYMENT</b>\n<i>Your order is ready</i>\n\n${steps(5)}\n${LINE}\n\n` +
     `<blockquote>🏷 <b>Provider:</b> ${brandName}\n` +
     `📦 <b>Package:</b> ${planLabel}` +
     `${quantity > 1 ? `\n🔢 <b>Quantity:</b> ${quantity}` : ""}\n` +
