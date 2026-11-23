@@ -1,43 +1,157 @@
 /** Centralized user-facing strings for the IPDokan Telegram bot. */
+
+const LINE = "━━━━━━━━━━━━━━━━━━━━";
+const THIN = "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈";
+
+/** Checkout progress: ●━━●━━○━━○ */
+function steps(current, labels = ["Category", "Product", "Package", "Quantity"]) {
+  const track = labels.map((_, i) => (i < current ? "●" : "○")).join("━━");
+  return `<code>${track}</code>  <i>Step ${current}/${labels.length} · ${labels[current - 1]}</i>`;
+}
+
 module.exports = {
-  welcome: (name) => `👋 <b>Welcome ${name || "Customer"} to IPDokan Proxy Store!</b>\n\n⚡ Get high-speed premium proxies at the best prices (GB bandwidth and IP-based packages).\n\n🛒 Choose your preferred proxy directly in Telegram and pay with <b>bKash, Nagad, Rocket, or Binance</b>.\n\nTap <b>"🛒 Buy Proxy"</b> below to view packages!`,
-  mainMenuButton: "🏠 Main Menu",
-  buyProxyButton: "🛒 Buy Proxy",
-  myOrdersButton: "📦 My Orders",
-  supportButton: "💬 Help & Support",
-  selectCategory: "🏷 <b>Choose a Category:</b>\n\nAll active categories from our website are listed below. Select the one you need:",
-  selectProduct: (categoryName) => `🏷 <b>${categoryName} - Products:</b>\n\nSelect your preferred brand or product from the list below:`,
-  selectPlan: (productName) => `📦 <b>${productName} - Available Packages:</b>\n\nChoose the package you need:`,
-  selectQuantity: (productName, planLabel, unitPrice, quantity, currency) => `🛒 <b>${productName}</b>\n📦 ${planLabel}\n\n<b>How many do you need?</b>\n\n${unitPrice} ${currency} × ${quantity}\n━━━━━━━━━━━━━━\n💰 <b>Total: ${formatMoney(unitPrice * quantity)} ${currency}</b>`,
-  orderSummary: (brandName, planLabel, price, currency, orderId, quantity = 1) => `🧾 <b>Order Confirmation</b>\n\n🏷 <b>Provider:</b> ${brandName}\n📦 <b>Package:</b> ${planLabel}${quantity > 1 ? `\n🔢 <b>Quantity:</b> ${quantity}` : ""}\n💰 <b>Price:</b> <b>${price} ${currency}</b>\n🆔 <b>Order ID:</b> <code>${orderId}</code>\n\nClick <b>"💳 Pay on Website"</b> below to complete payment.\n<i>(You can pay directly using bKash, Nagad, Rocket, Binance, or Wallet.)</i>`,
-  payButtonText: (amount, currency) => `💳 Pay on Website (${amount} ${currency})`,
-  cancelButtonText: "❌ Cancel Order",
-  orderCancelled: "❌ Your order has been cancelled. You can place a new order whenever you are ready.",
-  outOfStockAlert: "❌ Sorry, this package is currently out of stock. Please choose another package.",
-  deliverySuccess: (brandName, planLabel, credentials, orderId, quantity = 1, part = "") => `🎉 <b>Payment received and proxy delivered!</b>${part ? ` <i>(${part})</i>` : ""}\n\nYour proxy credentials are below:\n\n🏷 <b>Provider:</b> ${brandName}\n📦 <b>Package:</b> ${planLabel}${quantity > 1 ? `\n🔢 <b>Quantity:</b> ${quantity}` : ""}\n🆔 <b>Order ID:</b> <code>${orderId}</code>\n\n🔑 <b>Credentials:</b>\n<code>${credentials}</code>\n\n<i>👆 Tap the box to copy. Thank you for choosing IPDokan!</i>`,
-  orderPaidWaiting: (orderId, brandName, planLabel) => `✅ <b>Payment received successfully!</b>\n\n🆔 <b>Order:</b> <code>${orderId}</code>\n📦 <b>Package:</b> ${brandName} - ${planLabel}\n\nOur team will send your proxy credentials to this chat shortly. Please wait.`,
-  outOfStockPaid: (orderId) => `⚠️ <b>Important Order Notice (#${orderId})</b>\n\nYour payment was received successfully, but instant stock for this package has just run out.\n\n🔔 Our admin has been notified automatically. A proxy will be assigned to your account shortly.\n\nFor assistance, contact us: /support`,
-  noOrders: '📭 You have not placed any orders yet. Click "🛒 Buy Proxy" to get started!',
-  myOrdersHeader: "📦 <b>Your Recent Orders:</b>\n",
-  userOrdersCleared: (count) => `🗑️ <b>${count}</b> unpaid order${count === 1 ? " has" : "s have"} been removed from your cart.`,
-  noPendingOrders: "ℹ️ There are no pending or unpaid orders in your cart.",
-  orderCancelUnavailable: "⚠️ This order can no longer be cancelled. Contact support if you need help after payment.",
-  orderItem: (order, brandName, planLabel) => `━━━━━━━━━━━━━━━━━━\n🆔 <b>Order:</b> <code>${order.orderId}</code>\n🏷 <b>Package:</b> ${brandName} - ${planLabel}\n${order.quantity > 1 ? `🔢 <b>Quantity:</b> ${order.quantity}\n` : ""}💰 <b>Amount:</b> ${order.amount} ${order.currency}\n📊 <b>Status:</b> ${formatStatus(order.status)}\n📅 <b>Date:</b> ${new Date(order.createdAt).toLocaleDateString()}\n${order.deliveredCredentials ? `🔑 <b>Credentials:</b>\n<code>${order.deliveredCredentials}</code>\n` : ""}`,
-  support: (contact = "@ipdokan") => `💬 <b>IPDokan Help & Customer Support</b>\n\nContact us if you have trouble using your proxy or need payment information:\n\n👉 Telegram Support: ${contact}\n🌐 Website: https://ipdokan.com\n\nWhen contacting us, please include your <b>Order ID</b>.`,
-  adminStats: (stats) => `📊 <b>IPDokan Sales & Stock Summary</b>\n\n💰 <b>Today's Revenue:</b> ${stats.todayRevenue} ${stats.currency}\n📦 <b>Today's Orders:</b> ${stats.todayOrders}\n\n📈 <b>Last 7 Days Revenue:</b> ${stats.weekRevenue} ${stats.currency}\n📦 <b>Last 7 Days Orders:</b> ${stats.weekOrders}\n\n💎 <b>Total Lifetime Revenue:</b> ${stats.totalRevenue} ${stats.currency}\n📦 <b>Total Orders:</b> ${stats.totalOrders}\n👥 <b>Total Customers:</b> ${stats.totalUsers}\n\n⚠️ <b>Low Stock Alerts:</b> ${stats.lowStockCount} packages need restocking`,
-  adminOnly: "⛔ This command is available to administrators only.",
+  // Reply-keyboard labels. LEGACY_* keep old keyboards (still shown on users' phones) working.
+  mainMenuButton: "🏠 Home",
+  buyProxyButton: "⚡ Buy Proxy",
+  myOrdersButton: "🧾 My Orders",
+  supportButton: "💬 Support",
+  legacyButtons: {
+    mainMenu: ["🏠 Main Menu"],
+    buyProxy: ["🛒 Buy Proxy"],
+    myOrders: ["📦 My Orders"],
+    support: ["💬 Help & Support"],
+  },
+
+  welcome: (name) =>
+    `✨ <b>Hey ${name || "there"}, welcome to IPDokan</b>\n` +
+    `<i>Premium proxies, delivered right here in Telegram</i>\n` +
+    `${LINE}\n\n` +
+    `<blockquote>⚡ <b>Instant delivery</b>: credentials arrive a few seconds after you pay\n` +
+    `🌍 <b>Global IPs</b>: residential, ISP & datacenter\n` +
+    `📶 <b>Flexible plans</b>: pay per GB or per IP\n` +
+    `🔐 <b>Secure checkout</b>: bKash · Nagad · Rocket · Binance</blockquote>\n\n` +
+    `👇 Tap <b>⚡ Buy Proxy</b> to see the packages`,
+
+  selectCategory:
+    `🗂 <b>Choose a category</b>\n${steps(1)}\n${LINE}\n\n` +
+    `Pick the type of proxy you need. The number shows how many products are in each category.`,
+  selectProduct: (categoryName) =>
+    `🏷 <b>${categoryName}</b>\n${steps(2)}\n${LINE}\n\n` +
+    `Choose a brand or product:`,
+  selectPlan: (productName) =>
+    `📦 <b>${productName}</b>\n${steps(3)}\n${LINE}\n\n` +
+    `Choose a package. <i>⚡ = in stock · 🚫 = sold out</i>`,
+  selectQuantity: (productName, planLabel, unitPrice, quantity, currency) =>
+    `🛒 <b>${productName}</b>\n${steps(4)}\n${LINE}\n\n` +
+    `📦 <b>Package:</b> ${planLabel}\n` +
+    `💵 <b>Unit price:</b> ${unitPrice} ${currency}\n\n` +
+    `<blockquote>🔢 <b>Quantity:</b> ${quantity}\n` +
+    `🧮 ${unitPrice} ${currency} × ${quantity}\n` +
+    `💰 <b>Total: ${formatMoney(unitPrice * quantity)} ${currency}</b></blockquote>\n\n` +
+    `<i>Use ➖ / ➕ or a preset, then tap Confirm.</i>`,
+
+  orderSummary: (brandName, planLabel, price, currency, orderId, quantity = 1) =>
+    `🧾 <b>Order Ready</b>\n${LINE}\n\n` +
+    `<blockquote>🏷 <b>Provider:</b> ${brandName}\n` +
+    `📦 <b>Package:</b> ${planLabel}` +
+    `${quantity > 1 ? `\n🔢 <b>Quantity:</b> ${quantity}` : ""}\n` +
+    `🆔 <b>Order ID:</b> <code>${orderId}</code></blockquote>\n\n` +
+    `💰 <b>Total to pay:</b> <b>${price} ${currency}</b>\n${THIN}\n` +
+    `💳 Tap <b>Pay Securely</b> below to finish on our website.\n` +
+    `<i>bKash · Nagad · Rocket · Binance · Wallet</i>\n\n` +
+    `⚡ Your proxy will appear in this chat as soon as payment is confirmed.`,
+  payButtonText: (amount, currency) => `💳 Pay Securely · ${amount} ${currency}`,
+  cancelButtonText: "✖️ Cancel Order",
+  orderCancelled:
+    `🚫 <b>Order cancelled</b>\n\nNothing was charged. Tap <b>⚡ Buy Proxy</b> whenever you want to start a new order.`,
+  outOfStockAlert:
+    `😔 <b>Sold out</b>\n\nThis package is out of stock right now. Please pick another package.`,
+
+  deliverySuccess: (brandName, planLabel, credentials, orderId, quantity = 1, part = "") =>
+    `🎉 <b>Your proxy is ready!</b>${part ? ` <i>(${part})</i>` : ""}\n${LINE}\n\n` +
+    `<blockquote>🏷 <b>Provider:</b> ${brandName}\n` +
+    `📦 <b>Package:</b> ${planLabel}` +
+    `${quantity > 1 ? `\n🔢 <b>Quantity:</b> ${quantity}` : ""}\n` +
+    `🆔 <b>Order ID:</b> <code>${orderId}</code></blockquote>\n\n` +
+    `🔑 <b>Credentials</b>\n` +
+    `<pre><code class="language-proxy">${credentials}</code></pre>\n\n` +
+    `<i>👆 Tap the block to copy it. Thanks for choosing IPDokan 💜</i>`,
+  orderPaidWaiting: (orderId, brandName, planLabel) =>
+    `✅ <b>Payment received</b>\n${LINE}\n\n` +
+    `<blockquote>🆔 <b>Order:</b> <code>${orderId}</code>\n` +
+    `📦 <b>Package:</b> ${brandName} · ${planLabel}</blockquote>\n\n` +
+    `⏳ Our team is preparing your proxy. It will appear in this chat shortly.`,
+  outOfStockPaid: (orderId) =>
+    `⚠️ <b>Order #${orderId}: payment received</b>\n${LINE}\n\n` +
+    `Your payment went through, but this package ran out of instant stock a moment ago.\n\n` +
+    `<blockquote>🔔 Our admin has already been notified\n` +
+    `⏱ Your proxy will be assigned to you shortly</blockquote>\n\n` +
+    `Need help? Type /support`,
+
+  noOrders:
+    `📭 <b>No orders yet</b>\n\nTap <b>⚡ Buy Proxy</b> to place your first order.`,
+  myOrdersHeader: `🧾 <b>Your Recent Orders</b>\n${LINE}\n`,
+  userOrdersCleared: (count) =>
+    `🗑 <b>${count}</b> unpaid order${count === 1 ? " was" : "s were"} removed from your cart.`,
+  noPendingOrders: "ℹ️ You have no unpaid orders in your cart.",
+  orderCancelUnavailable:
+    "⚠️ This order can't be cancelled anymore. Contact support if you need help after paying.",
+  orderItem: (order, brandName, planLabel) =>
+    `\n${statusIcon(order.status)} <b>${brandName}</b> · ${planLabel}\n` +
+    `<blockquote>🆔 <code>${order.orderId}</code>\n` +
+    `💰 ${order.amount} ${order.currency}` +
+    `${order.quantity > 1 ? `  ·  🔢 ×${order.quantity}` : ""}\n` +
+    `📊 ${formatStatus(order.status)}  ·  📅 ${new Date(order.createdAt).toLocaleDateString()}</blockquote>` +
+    `${order.deliveredCredentials ? `\n🔑 <b>Credentials</b>\n<blockquote expandable><code>${order.deliveredCredentials}</code></blockquote>` : ""}\n`,
+
+  support: (contact = "@ipdokan") =>
+    `💬 <b>Help & Support</b>\n${LINE}\n\n` +
+    `Problem with a proxy or a payment? We can help.\n\n` +
+    `<blockquote>👤 <b>Telegram:</b> ${contact}\n` +
+    `🌐 <b>Website:</b> https://ipdokan.com\n` +
+    `🕘 <b>Usually replies:</b> within minutes</blockquote>\n\n` +
+    `📝 <i>Include your <b>Order ID</b> so we can help faster.</i>`,
+
+  adminStats: (stats) =>
+    `📊 <b>IPDokan · Sales & Stock</b>\n${LINE}\n\n` +
+    `☀️ <b>Today</b>\n` +
+    `<blockquote>💰 Revenue: <b>${stats.todayRevenue} ${stats.currency}</b>\n` +
+    `📦 Orders: <b>${stats.todayOrders}</b></blockquote>\n\n` +
+    `📈 <b>Last 7 days</b>\n` +
+    `<blockquote>💰 Revenue: <b>${stats.weekRevenue} ${stats.currency}</b>\n` +
+    `📦 Orders: <b>${stats.weekOrders}</b></blockquote>\n\n` +
+    `💎 <b>All time</b>\n` +
+    `<blockquote>💰 Revenue: <b>${stats.totalRevenue} ${stats.currency}</b>\n` +
+    `📦 Orders: <b>${stats.totalOrders}</b>\n` +
+    `👥 Customers: <b>${stats.totalUsers}</b></blockquote>\n\n` +
+    `${stats.lowStockCount > 0 ? "⚠️" : "✅"} <b>Low stock:</b> ${stats.lowStockCount} package${stats.lowStockCount === 1 ? "" : "s"} need restocking`,
+  adminOnly: "⛔ Only admins can use this command.",
 };
+
+function statusIcon(status) {
+  switch (status) {
+    case "delivered":
+    case "completed": return "🟢";
+    case "paid":
+    case "processing": return "🟣";
+    case "stock_pending": return "🟡";
+    case "pending": return "⚪️";
+    case "failed": return "🔴";
+    case "cancelled": return "⚫️";
+    default: return "⚪️";
+  }
+}
 
 function formatStatus(status) {
   switch (status) {
-    case "delivered": return "✅ Delivered";
-    case "completed": return "✅ Completed";
+    case "delivered": return "Delivered";
+    case "completed": return "Completed";
     case "paid":
-    case "processing": return "🟢 Paid (Processing)";
-    case "stock_pending": return "⏳ Provisioning Stock";
-    case "pending": return "🕒 Awaiting Payment";
-    case "failed": return "❌ Failed";
-    case "cancelled": return "🚫 Cancelled";
+    case "processing": return "Paid · Processing";
+    case "stock_pending": return "Preparing stock";
+    case "pending": return "Awaiting payment";
+    case "failed": return "Failed";
+    case "cancelled": return "Cancelled";
     default: return status;
   }
 }

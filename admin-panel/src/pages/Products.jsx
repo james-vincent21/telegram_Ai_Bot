@@ -204,11 +204,11 @@ export default function Products() {
         );
 
   return (
-    <div className="space-y-10">
+    <div className="animate-fade-up space-y-10">
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">
+          <h1 className="page-title">
             Proxy Brands & Plans
           </h1>
           <p className="text-sm text-gray-400 mt-1">
@@ -231,21 +231,21 @@ export default function Products() {
                 setLoading(false);
               }
             }}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-indigo-600/20 transition"
+            className="inline-flex items-center gap-2 px-4 py-2.5 btn-gradient-cyan text-white rounded-xl text-sm font-semibold transition"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />{" "}
             Sync with WooCommerce
           </button>
           <button
             onClick={() => handleOpenBrandModal()}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-blue-600/20 transition"
+            className="inline-flex items-center gap-2 px-4 py-2.5 btn-gradient text-white rounded-xl text-sm font-semibold transition"
           >
             <Plus className="w-4 h-4" /> Add Brand
           </button>
           <button
             onClick={() => handleOpenPlanModal()}
             disabled={brands.length === 0}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-emerald-600/20 transition disabled:opacity-50"
+            className="inline-flex items-center gap-2 px-4 py-2.5 btn-gradient-emerald text-white rounded-xl text-sm font-semibold transition disabled:opacity-50"
           >
             <Plus className="w-4 h-4" /> Add Plan
           </button>
@@ -274,8 +274,8 @@ export default function Products() {
               key={brand._id}
               className={`p-5 rounded-2xl border transition-all ${
                 brand.isActive
-                  ? "bg-[#111827] border-gray-800"
-                  : "bg-[#0f1420] border-gray-800/40 opacity-60"
+                  ? "glass-card border-gray-800"
+                  : "glass-soft border-gray-800/40 opacity-60"
               }`}
             >
               <div className="flex items-start justify-between">
@@ -345,7 +345,7 @@ export default function Products() {
             <select
               value={selectedBrandFilter}
               onChange={(e) => setSelectedBrandFilter(e.target.value)}
-              className="bg-[#111827] border border-gray-700 text-xs text-gray-200 rounded-xl px-3 py-2 outline-none focus:border-blue-500"
+              className="glass-card border border-gray-700 text-xs text-gray-200 rounded-xl px-3 py-2 outline-none focus:border-blue-500"
             >
               <option value="all">All Brands</option>
               {brands.map((b) => (
@@ -357,10 +357,10 @@ export default function Products() {
           </div>
         </div>
 
-        <div className="bg-[#111827] border border-gray-800 rounded-2xl overflow-hidden shadow-sm">
+        <div className="glass-card border border-gray-800 rounded-2xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm text-gray-300">
-              <thead className="bg-[#0e1422] text-xs font-semibold text-gray-400 uppercase tracking-wider border-b border-gray-800">
+              <thead className="glass-soft text-xs font-semibold text-gray-400 uppercase tracking-wider border-b border-gray-800">
                 <tr>
                   <th className="py-3 px-5">Brand</th>
                   <th className="py-3 px-5">Plan Label</th>
@@ -442,8 +442,8 @@ export default function Products() {
 
       {/* BRAND MODAL */}
       {brandModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-[#111827] border border-gray-800 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+        <div className="modal-overlay">
+          <div className="glass-card border border-gray-800 rounded-2xl max-w-md w-full p-6 shadow-2xl">
             <h3 className="text-lg font-bold text-white mb-4">
               {editingBrand ? "Edit Proxy Brand" : "Add New Proxy Brand"}
             </h3>
@@ -461,7 +461,7 @@ export default function Products() {
                     setBrandForm({ ...brandForm, name: e.target.value })
                   }
                   placeholder="e.g. 9Proxy"
-                  className="w-full bg-[#0b0f19] border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
+                  className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
                 />
               </div>
 
@@ -477,7 +477,7 @@ export default function Products() {
                       setBrandForm({ ...brandForm, emoji: e.target.value })
                     }
                     placeholder="⚡"
-                    className="w-full bg-[#0b0f19] border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none text-center"
+                    className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none text-center"
                   />
                 </div>
                 <div>
@@ -493,7 +493,7 @@ export default function Products() {
                         displayOrder: e.target.value,
                       })
                     }
-                    className="w-full bg-[#0b0f19] border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none text-center"
+                    className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none text-center"
                   />
                 </div>
               </div>
@@ -509,7 +509,7 @@ export default function Products() {
                     setBrandForm({ ...brandForm, description: e.target.value })
                   }
                   placeholder="Fast, clean residential proxies..."
-                  className="w-full bg-[#0b0f19] border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none resize-none"
+                  className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none resize-none"
                 />
               </div>
 
@@ -538,7 +538,7 @@ export default function Products() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-semibold shadow-md shadow-blue-600/30"
+                  className="px-4 py-2 btn-gradient text-white rounded-xl text-sm font-semibold"
                 >
                   Save Brand
                 </button>
@@ -550,8 +550,8 @@ export default function Products() {
 
       {/* PLAN MODAL */}
       {planModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-[#111827] border border-gray-800 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+        <div className="modal-overlay">
+          <div className="glass-card border border-gray-800 rounded-2xl max-w-md w-full p-6 shadow-2xl">
             <h3 className="text-lg font-bold text-white mb-4">
               {editingPlan ? "Edit Plan" : "Add New Plan"}
             </h3>
@@ -567,7 +567,7 @@ export default function Products() {
                   onChange={(e) =>
                     setPlanForm({ ...planForm, brandId: e.target.value })
                   }
-                  className="w-full bg-[#0b0f19] border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
+                  className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
                 >
                   <option value="" disabled>
                     Select Brand
@@ -592,7 +592,7 @@ export default function Products() {
                     setPlanForm({ ...planForm, label: e.target.value })
                   }
                   placeholder="e.g. 5 GB Residential (30 Days)"
-                  className="w-full bg-[#0b0f19] border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
+                  className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
                 />
               </div>
 
@@ -610,7 +610,7 @@ export default function Products() {
                       setPlanForm({ ...planForm, price: e.target.value })
                     }
                     placeholder="1500"
-                    className="w-full bg-[#0b0f19] border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none text-right font-mono"
+                    className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none text-right font-mono"
                   />
                 </div>
                 <div>
@@ -627,7 +627,7 @@ export default function Products() {
                       })
                     }
                     placeholder="BDT"
-                    className="w-full bg-[#0b0f19] border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none text-center font-semibold"
+                    className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none text-center font-semibold"
                   />
                 </div>
               </div>
@@ -643,7 +643,7 @@ export default function Products() {
                     onChange={(e) =>
                       setPlanForm({ ...planForm, durationDays: e.target.value })
                     }
-                    className="w-full bg-[#0b0f19] border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none text-center"
+                    className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none text-center"
                   />
                 </div>
                 <div>
@@ -656,7 +656,7 @@ export default function Products() {
                     onChange={(e) =>
                       setPlanForm({ ...planForm, displayOrder: e.target.value })
                     }
-                    className="w-full bg-[#0b0f19] border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none text-center"
+                    className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none text-center"
                   />
                 </div>
               </div>
@@ -686,7 +686,7 @@ export default function Products() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-sm font-semibold shadow-md shadow-emerald-600/30"
+                  className="px-4 py-2 btn-gradient-emerald text-white rounded-xl text-sm font-semibold"
                 >
                   Save Plan
                 </button>

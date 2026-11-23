@@ -6,9 +6,11 @@ const strings = require("./config/strings");
  */
 function mainMenuKeyboard() {
   return Markup.keyboard([
-    [strings.buyProxyButton, strings.myOrdersButton],
-    [strings.supportButton],
-  ]).resize();
+    [strings.buyProxyButton],
+    [strings.myOrdersButton, strings.supportButton],
+  ])
+    .resize()
+    .placeholder("Pick an option below 👇");
 }
 
 /**
@@ -18,7 +20,7 @@ function mainMenuKeyboard() {
 function categoriesKeyboard(categories) {
   const buttons = categories.map((cat) =>
     Markup.button.callback(
-      `${cat.emoji} ${cat.name} (${cat.count})`,
+      `${cat.emoji} ${cat.name} · ${cat.count}`,
       `cat_${cat.id}`,
     ),
   );
@@ -31,7 +33,7 @@ function categoriesKeyboard(categories) {
 
   // Refresh button
   rows.push([
-    Markup.button.callback("🔄 Refresh Categories", "refresh_categories"),
+    Markup.button.callback("🔄 Refresh", "refresh_categories"),
   ]);
 
   return Markup.inlineKeyboard(rows);
@@ -44,7 +46,7 @@ function categoriesKeyboard(categories) {
  */
 function productsKeyboard(products, categoryId) {
   const buttons = products.map((prod) =>
-    Markup.button.callback(`📦 ${prod.name}`, `prod_${prod.id}_${categoryId}`),
+    Markup.button.callback(`✦ ${prod.name}`, `prod_${prod.id}_${categoryId}`),
   );
 
   // Group 2 per row
@@ -55,7 +57,7 @@ function productsKeyboard(products, categoryId) {
 
   // Back button to category selection
   rows.push([
-    Markup.button.callback("⬅️ Back to Categories", "back_to_cats"),
+    Markup.button.callback("‹ Categories", "back_to_cats"),
     Markup.button.callback("🔄 Refresh", `cat_${categoryId}`),
   ]);
 
@@ -71,17 +73,17 @@ function productsKeyboard(products, categoryId) {
 function variationsKeyboard(variations, productId, categoryId) {
   const rows = variations.map((v) => {
     if (v.inStock) {
-      const stockBadge = v.stockQuantity ? `(${v.stockQuantity} left)` : "";
+      const stockBadge = v.stockQuantity ? ` · ${v.stockQuantity} left` : "";
       return [
         Markup.button.callback(
-          `⚡ ${v.name} — ${v.price} BDT ${stockBadge}`,
+          `⚡ ${v.name}  ·  ${v.price} ৳${stockBadge}`,
           `var_${productId}_${v.id}`,
         ),
       ];
     } else {
       return [
         Markup.button.callback(
-          `❌ ${v.name} — ${v.price} BDT [Out of Stock]`,
+          `🚫 ${v.name}  ·  Sold out`,
           `outofstock_${v.id}`,
         ),
       ];
@@ -90,7 +92,7 @@ function variationsKeyboard(variations, productId, categoryId) {
 
   // Back to product list under this category
   rows.push([
-    Markup.button.callback("⬅️ Back to Products", `cat_${categoryId}`),
+    Markup.button.callback("‹ Back to Products", `cat_${categoryId}`),
   ]);
 
   return Markup.inlineKeyboard(rows);
@@ -114,19 +116,19 @@ function quantityKeyboard(productId, variationId, quantity, max, totalLabel) {
   return Markup.inlineKeyboard([
     [
       Markup.button.callback("➖", set(quantity - 1)),
-      Markup.button.callback(`  ${quantity}  `, set(quantity)),
+      Markup.button.callback(`🔢 ${quantity}`, set(quantity)),
       Markup.button.callback("➕", set(quantity + 1)),
     ],
     presets.map((q) =>
-      Markup.button.callback(q === quantity ? `• ${q} •` : String(q), set(q)),
+      Markup.button.callback(q === quantity ? `✅ ${q}` : `×${q}`, set(q)),
     ),
     [
       Markup.button.callback(
-        `✅ Confirm · ${totalLabel}`,
+        `🛒 Confirm Order · ${totalLabel}`,
         `buy_${productId}_${vid}_${quantity}`,
       ),
     ],
-    [Markup.button.callback("⬅️ Back", "back_to_cats")],
+    [Markup.button.callback("‹ Back to Categories", "back_to_cats")],
   ]);
 }
 
@@ -140,7 +142,7 @@ function quantityKeyboard(productId, variationId, quantity, max, totalLabel) {
 function orderPaymentKeyboard(checkoutUrl, orderId, amount, currency) {
   return Markup.inlineKeyboard([
     [Markup.button.url(strings.payButtonText(amount, currency), checkoutUrl)],
-    [Markup.button.callback("❌ Cancel Order", `cancel_order_${orderId}`)],
+    [Markup.button.callback(strings.cancelButtonText, `cancel_order_${orderId}`)],
   ]);
 }
 
@@ -154,14 +156,14 @@ function userOrdersKeyboard(pendingCount = 0) {
   if (pendingCount > 0) {
     rows.push([
       Markup.button.callback(
-        `🗑️ Remove Unpaid Cart (${pendingCount})`,
+        `🗑 Clear Unpaid Orders · ${pendingCount}`,
         "user_clear_pending",
       ),
     ]);
   }
   rows.push([
-    Markup.button.callback("🔄 Refresh Orders", "user_refresh_orders"),
-    Markup.button.callback("🛒 Buy Proxy", "back_to_cats"),
+    Markup.button.callback("🔄 Refresh", "user_refresh_orders"),
+    Markup.button.callback("⚡ Buy Proxy", "back_to_cats"),
   ]);
   return Markup.inlineKeyboard(rows);
 }

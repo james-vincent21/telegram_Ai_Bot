@@ -153,18 +153,18 @@ export default function Stock() {
   );
 
   return (
-    <div className="space-y-10">
+    <div className="animate-fade-up space-y-10">
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">Stock & Credential Inventory</h1>
+          <h1 className="page-title">Stock & Credential Inventory</h1>
           <p className="text-sm text-gray-400 mt-1">
             Manage available proxy credentials, monitor low stock, and bulk import new inventory
           </p>
         </div>
         <button
           onClick={() => handleOpenUpload()}
-          className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-blue-600/20 transition"
+          className="inline-flex items-center gap-2 px-4 py-2.5 btn-gradient text-white rounded-xl text-sm font-semibold transition"
         >
           <UploadCloud className="w-4 h-4" /> Bulk Import Stock
         </button>
@@ -183,7 +183,7 @@ export default function Stock() {
               className={`p-5 rounded-2xl border transition-all ${
                 item.isLowStock
                   ? 'bg-amber-950/20 border-amber-800/50'
-                  : 'bg-[#111827] border-gray-800'
+                  : 'glass-card border-gray-800'
               }`}
             >
               <div className="flex items-start justify-between">
@@ -244,7 +244,7 @@ export default function Stock() {
                 setFilterBrand(e.target.value);
                 setFilterPlan('all');
               }}
-              className="bg-[#111827] border border-gray-700 text-xs text-gray-200 rounded-xl px-3 py-2 outline-none"
+              className="glass-card border border-gray-700 text-xs text-gray-200 rounded-xl px-3 py-2 outline-none"
             >
               <option value="all">All Brands</option>
               {brands.map((b) => (
@@ -257,7 +257,7 @@ export default function Stock() {
             <select
               value={filterPlan}
               onChange={(e) => setFilterPlan(e.target.value)}
-              className="bg-[#111827] border border-gray-700 text-xs text-gray-200 rounded-xl px-3 py-2 outline-none"
+              className="glass-card border border-gray-700 text-xs text-gray-200 rounded-xl px-3 py-2 outline-none"
             >
               <option value="all">All Plans</option>
               {plans
@@ -272,7 +272,7 @@ export default function Stock() {
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
-              className="bg-[#111827] border border-gray-700 text-xs text-gray-200 rounded-xl px-3 py-2 outline-none"
+              className="glass-card border border-gray-700 text-xs text-gray-200 rounded-xl px-3 py-2 outline-none"
             >
               <option value="all">All Status</option>
               <option value="unused">Unused (In Stock)</option>
@@ -281,10 +281,10 @@ export default function Stock() {
           </div>
         </div>
 
-        <div className="bg-[#111827] border border-gray-800 rounded-2xl overflow-hidden shadow-sm">
+        <div className="glass-card border border-gray-800 rounded-2xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm text-gray-300">
-              <thead className="bg-[#0e1422] text-xs font-semibold text-gray-400 uppercase tracking-wider border-b border-gray-800">
+              <thead className="glass-soft text-xs font-semibold text-gray-400 uppercase tracking-wider border-b border-gray-800">
                 <tr>
                   <th className="py-3 px-5">Brand / Plan</th>
                   <th className="py-3 px-5">Credentials</th>
@@ -314,7 +314,7 @@ export default function Stock() {
                         </td>
                         <td className="py-3.5 px-5">
                           <div className="flex items-center gap-2 font-mono text-xs">
-                            <span className="bg-[#0b0f19] px-2.5 py-1 rounded-lg border border-gray-800 max-w-xs truncate text-gray-200 select-all">
+                            <span className="field px-2.5 py-1 rounded-lg border border-gray-800 max-w-xs truncate text-gray-200 select-all">
                               {isRevealed
                                 ? item.credentials
                                 : '••••••••••••••••••••••••••••••••••••••'}
@@ -374,8 +374,8 @@ export default function Stock() {
 
       {/* BULK UPLOAD MODAL */}
       {uploadModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-[#111827] border border-gray-800 rounded-2xl max-w-xl w-full p-6 shadow-2xl">
+        <div className="modal-overlay">
+          <div className="glass-card border border-gray-800 rounded-2xl max-w-xl w-full p-6 shadow-2xl">
             <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
               <UploadCloud className="w-5 h-5 text-blue-400" /> Bulk Import Proxy Credentials
             </h3>
@@ -401,7 +401,7 @@ export default function Stock() {
                         planId: brandPlans[0]?._id || '',
                       });
                     }}
-                    className="w-full bg-[#0b0f19] border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
+                    className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
                   >
                     {brands.map((b) => (
                       <option key={b._id} value={b._id}>
@@ -417,7 +417,7 @@ export default function Stock() {
                     required
                     value={uploadForm.planId}
                     onChange={(e) => setUploadForm({ ...uploadForm, planId: e.target.value })}
-                    className="w-full bg-[#0b0f19] border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
+                    className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
                   >
                     {filteredUploadPlans.length === 0 ? (
                       <option disabled value="">
@@ -455,7 +455,7 @@ export default function Stock() {
                   value={uploadForm.credentials}
                   onChange={(e) => setUploadForm({ ...uploadForm, credentials: e.target.value })}
                   placeholder={`192.168.1.1:8080:user1:pass1\n192.168.1.2:8080:user2:pass2\n192.168.1.3:8080:user3:pass3`}
-                  className="w-full bg-[#0b0f19] border border-gray-700 focus:border-blue-500 rounded-xl p-3 text-xs font-mono text-gray-200 outline-none resize-none leading-relaxed"
+                  className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl p-3 text-xs font-mono text-gray-200 outline-none resize-none leading-relaxed"
                 />
                 <p className="text-[11px] text-gray-500 mt-1">
                   Lines starting with # or empty lines are automatically ignored.
@@ -469,7 +469,7 @@ export default function Stock() {
                   value={uploadForm.batchNote}
                   onChange={(e) => setUploadForm({ ...uploadForm, batchNote: e.target.value })}
                   placeholder="e.g. Supplier Batch A - March 2026"
-                  className="w-full bg-[#0b0f19] border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
+                  className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
                 />
               </div>
 
@@ -484,7 +484,7 @@ export default function Stock() {
                 <button
                   type="submit"
                   disabled={uploading || filteredUploadPlans.length === 0}
-                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-semibold shadow-md shadow-blue-600/30 disabled:opacity-50 flex items-center gap-2"
+                  className="px-5 py-2.5 btn-gradient text-white rounded-xl text-sm font-semibold disabled:opacity-50 flex items-center gap-2"
                 >
                   {uploading ? (
                     <>

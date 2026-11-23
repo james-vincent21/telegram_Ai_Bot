@@ -47,7 +47,7 @@ function registerCustomerHandlers(bot) {
   });
 
   // Main menu button
-  bot.hears(strings.mainMenuButton, async (ctx) => {
+  bot.hears([strings.mainMenuButton, ...strings.legacyButtons.mainMenu], async (ctx) => {
     await trackUser(ctx.from);
     await ctx.reply(strings.welcome(ctx.from.first_name), {
       parse_mode: "HTML",
@@ -56,7 +56,7 @@ function registerCustomerHandlers(bot) {
   });
 
   // Step 1: User taps "Buy Proxy" or /buy -> Fetch & display ALL categories from WooCommerce
-  bot.hears(strings.buyProxyButton, showAllCategories);
+  bot.hears([strings.buyProxyButton, ...strings.legacyButtons.buyProxy], showAllCategories);
   bot.command("buy", showAllCategories);
 
   async function showAllCategories(ctx) {
@@ -210,7 +210,7 @@ function registerCustomerHandlers(bot) {
       return ctx.editMessageText("❌ The selected package could not be found.");
     }
     if (!item.inStock) {
-      return ctx.editMessageText(strings.outOfStockAlert);
+      return ctx.editMessageText(strings.outOfStockAlert, { parse_mode: "HTML" });
     }
     const max = maxQuantity(item);
     const qty = Math.min(max, Math.max(1, quantity));
@@ -270,7 +270,7 @@ function registerCustomerHandlers(bot) {
         return ctx.editMessageText("❌ The selected package could not be found.");
       }
       if (!item.inStock) {
-        return ctx.editMessageText(strings.outOfStockAlert);
+        return ctx.editMessageText(strings.outOfStockAlert, { parse_mode: "HTML" });
       }
 
       const quantity = Math.min(
@@ -346,7 +346,7 @@ function registerCustomerHandlers(bot) {
         return;
       }
       await ctx.answerCbQuery("Order cancelled");
-      return ctx.editMessageText(strings.orderCancelled);
+      return ctx.editMessageText(strings.orderCancelled, { parse_mode: "HTML" });
     } catch (err) {
       console.error("[Cancel Order]", err.message);
       return ctx.answerCbQuery("Unable to cancel the order. Please try again.", {
@@ -356,7 +356,7 @@ function registerCustomerHandlers(bot) {
   });
 
   // /myorders command or reply button
-  bot.hears(strings.myOrdersButton, showMyOrders);
+  bot.hears([strings.myOrdersButton, ...strings.legacyButtons.myOrders], showMyOrders);
   bot.command("myorders", showMyOrders);
 
   async function showMyOrders(ctx) {
@@ -462,7 +462,7 @@ function registerCustomerHandlers(bot) {
   }
 
   // /help or /support command or reply button
-  bot.hears(strings.supportButton, showSupport);
+  bot.hears([strings.supportButton, ...strings.legacyButtons.support], showSupport);
   bot.command("help", showSupport);
   bot.command("support", showSupport);
 
