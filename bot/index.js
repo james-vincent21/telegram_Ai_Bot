@@ -3,6 +3,10 @@ const { Telegraf } = require('telegraf');
 const mongoose = require('mongoose');
 const { registerCustomerHandlers, registerFallbackHandler } = require('./handlers/customer');
 const { registerAdminHandlers } = require('./handlers/admin');
+const { registerToolHandlers } = require('./handlers/tools');
+const { registerTicketHandlers, registerTicketTextHandler } = require('./handlers/tickets');
+const { startReminderScheduler } = require('./reminders');
+const keyboards = require('./keyboards');
 const notifyAdminService = require('../services/notifyAdmin');
 
 const token = process.env.BOT_TOKEN;
@@ -30,7 +34,10 @@ bot.catch((err, ctx) => {
 
 // Register bot modules
 registerCustomerHandlers(bot);
+registerToolHandlers(bot);
+registerTicketHandlers(bot);
 registerAdminHandlers(bot);
+registerTicketTextHandler(bot); // after admin text wizard, before fallback
 registerFallbackHandler(bot); // must stay last
 
 async function launchBot() {
@@ -56,9 +63,17 @@ async function launchBot() {
         { command: 'start', description: '🏠 Home & main menu' },
         { command: 'buy', description: '⚡ Buy a proxy' },
         { command: 'myorders', description: '🧾 My orders & credentials' },
+        { command: 'ticket', description: '🎫 Open a support ticket' },
+        { command: 'tickets', description: '📂 My support tickets' },
         { command: 'support', description: '💬 Help & support' },
       ]);
-      await bot.telegram.setChatMenuButton({ menuButton: { type: 'commands' } });
+      // Menu button opens the Mini App shop when an https SHOP_URL is set
+      const shop = keyboards.shopUrl();
+      await bot.telegram.setChatMenuButton({
+        menuButton: shop
+          ? { type: 'web_app', text: 'Shop', web_app: { url: shop } }
+          : { type: 'commands' },
+      });
     } catch (err) {
       console.warn('⚠️ [Telegram Bot] Could not set command menu:', err.message);
     }
@@ -68,6 +83,7 @@ async function launchBot() {
       dropPendingUpdates: true,
     });
     console.log('🚀 [Telegram Bot] Polling started successfully!');
+    startReminderScheduler(bot.telegram);
   } catch (err) {
     console.error('❌ [Telegram Bot] Failed to start bot:', err.message);
   }

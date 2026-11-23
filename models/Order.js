@@ -121,10 +121,62 @@ const orderSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: null,
     },
+    // When the proxy runs out (set automatically on delivery, see below)
+    expiresAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    durationDays: {
+      type: Number,
+      default: null,
+    },
+    expiryReminderSentAt: {
+      type: Date,
+      default: null,
+    },
+    // PDF memo sent to the customer after payment
+    receiptSentAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,
   },
 );
+
+const DEFAULT_PROXY_DAYS = () => parseInt(process.env.DEFAULT_PROXY_DAYS || "30", 10);
+
+/**
+ * Reads a duration from a package name: "30 Days", "1 Month", "2 weeks",
+ * "7D", "1 Year". Returns null when the name has none.
+ */
+function parseDurationDays(...names) {
+  const text = names.filter(Boolean).join(" ").toLowerCase();
+  const m = text.match(/(\d+)\s*(days?|d\b|weeks?|w\b|months?|mo\b|m\b|years?|y\b)/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  const unit = m[2];
+  if (unit.startsWith("w")) return n * 7;
+  if (unit.startsWith("mo") || unit === "m" || unit.startsWith("month")) return n * 30;
+  if (unit.startsWith("y")) return n * 365;
+  return n;
+}
+
+// Set the expiry date the first time an order is marked as delivered
+orderSchema.pre("save", function setExpiry(next) {
+  if (this.status === "delivered" && this.deliveredAt && !this.expiresAt) {
+    const days =
+      this.durationDays ||
+      parseDurationDays(this.variationName, this.productName) ||
+      DEFAULT_PROXY_DAYS();
+    this.durationDays = days;
+    this.expiresAt = new Date(this.deliveredAt.getTime() + days * 24 * 60 * 60 * 1000);
+  }
+  next();
+});
+
+orderSchema.statics.parseDurationDays = parseDurationDays;
 
 module.exports = mongoose.models.Order || mongoose.model("Order", orderSchema);

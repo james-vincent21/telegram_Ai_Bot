@@ -9,6 +9,9 @@ const Stock = require("../../models/Stock");
 const Order = require("../../models/Order");
 const User = require("../../models/User");
 const Admin = require("../../models/Admin");
+const Ticket = require("../../models/Ticket");
+const Broadcast = require("../../models/Broadcast");
+const broadcastService = require("../../services/broadcast");
 const stockService = require("../../services/stockService");
 const woocommerce = require("../../services/woocommerce");
 const strings = require("../../bot/config/strings");
@@ -546,7 +549,7 @@ router.post("/orders/:id/deliver", async (req, res) => {
       );
       await bot.telegram.sendMessage(order.telegramId, message, {
         parse_mode: "HTML",
-        ...keyboards.afterDeliveryKeyboard(),
+        ...keyboards.afterDeliveryKeyboard(order.orderId),
       });
     } catch (tgErr) {
       console.error("Failed to send Telegram message:", tgErr.message);
@@ -577,6 +580,145 @@ router.delete("/orders/clear", async (req, res) => {
       deletedCount: result.deletedCount,
       message: `Cleared ${result.deletedCount} orders successfully.`,
     });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// 8. Support Tickets
+// ==========================================
+router.get("/tickets", async (req, res) => {
+  try {
+    const { status = "all", search = "" } = req.query;
+    const filter = {};
+    if (status !== "all") filter.status = status;
+    if (search) {
+      const rx = { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" };
+      filter.$or = [{ ticketNo: rx }, { telegramUsername: rx }, { telegramFirstName: rx }, { orderId: rx }];
+      if (!isNaN(Number(search))) filter.$or.push({ telegramId: Number(search) });
+    }
+    const [tickets, counts] = await Promise.all([
+      Ticket.find(filter).sort({ lastMessageAt: -1 }).limit(100),
+      Ticket.aggregate([{ $group: { _id: "$status", n: { $sum: 1 } } }]),
+    ]);
+    const byStatus = Object.fromEntries(counts.map((c) => [c._id, c.n]));
+    return res.json({ tickets, counts: { open: byStatus.open || 0, answered: byStatus.answered || 0, closed: byStatus.closed || 0 } });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/tickets/:id", async (req, res) => {
+  try {
+    const ticket = await Ticket.findById(req.params.id);
+    if (!ticket) return res.status(404).json({ error: "Ticket not found" });
+    return res.json(ticket);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/tickets/:id/reply", async (req, res) => {
+  const text = String(req.body.text || "").trim();
+  if (!text) return res.status(400).json({ error: "Reply text is required" });
+  try {
+    const ticket = await Ticket.findByIdAndUpdate(
+      req.params.id,
+      {
+        $push: { messages: { from: "admin", text: text.slice(0, 4000), adminName: req.admin?.username || "Admin" } },
+        $set: { status: "answered", lastMessageAt: new Date() },
+      },
+      { new: true },
+    );
+    if (!ticket) return res.status(404).json({ error: "Ticket not found" });
+
+    let delivered = true;
+    try {
+      await bot.telegram.sendMessage(ticket.telegramId, strings.ticketAdminReply(ticket.ticketNo, text), {
+        parse_mode: "HTML",
+        ...keyboards.ticketReplyKeyboard(String(ticket._id)),
+      });
+    } catch (tgErr) {
+      delivered = false;
+      console.error("[Tickets] Could not message customer:", tgErr.message);
+    }
+    return res.json({ ticket, delivered });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/tickets/:id/status", async (req, res) => {
+  const { status } = req.body;
+  if (!["open", "answered", "closed"].includes(status)) return res.status(400).json({ error: "Invalid status" });
+  try {
+    const ticket = await Ticket.findByIdAndUpdate(req.params.id, { $set: { status } }, { new: true });
+    if (!ticket) return res.status(404).json({ error: "Ticket not found" });
+    if (status === "closed") {
+      bot.telegram
+        .sendMessage(ticket.telegramId, strings.ticketClosedByAdmin(ticket.ticketNo), { parse_mode: "HTML" })
+        .catch(() => {});
+    }
+    return res.json(ticket);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// 9. Broadcast
+// ==========================================
+function broadcastInput(body) {
+  return {
+    text: String(body.text || "").trim().slice(0, 4000),
+    buttonText: String(body.buttonText || "").trim().slice(0, 60),
+    buttonUrl: String(body.buttonUrl || "").trim(),
+    addShopButton: Boolean(body.addShopButton),
+    audience: body.audience === "buyers" ? "buyers" : "all",
+  };
+}
+
+router.get("/broadcasts", async (req, res) => {
+  try {
+    const [items, all, buyers] = await Promise.all([
+      Broadcast.find().sort({ createdAt: -1 }).limit(20),
+      broadcastService.countAudience("all"),
+      broadcastService.countAudience("buyers"),
+    ]);
+    return res.json({ broadcasts: items, audience: { all, buyers }, shopEnabled: Boolean(keyboards.shopUrl()) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/broadcasts/test", async (req, res) => {
+  const data = broadcastInput(req.body);
+  if (!data.text) return res.status(400).json({ error: "Message text is required" });
+  try {
+    const n = await broadcastService.sendTest(bot.telegram, data);
+    return res.json({ success: true, message: `Test sent to ${n} admin${n === 1 ? "" : "s"}.` });
+  } catch (err) {
+    const tgMsg = err.response?.description;
+    return res.status(400).json({ error: tgMsg ? `Telegram rejected the message: ${tgMsg}` : err.message });
+  }
+});
+
+router.post("/broadcasts", async (req, res) => {
+  const data = broadcastInput(req.body);
+  if (!data.text) return res.status(400).json({ error: "Message text is required" });
+  try {
+    const b = await broadcastService.start(bot.telegram, data, req.admin?.username || "");
+    return res.json(b);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+router.post("/broadcasts/:id/stop", async (req, res) => {
+  try {
+    broadcastService.stop(req.params.id);
+    return res.json({ success: true });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

@@ -32,6 +32,12 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    // Set when Telegram says the user blocked the bot (skipped by broadcasts)
+    isBlocked: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
   },
   {
     timestamps: true,

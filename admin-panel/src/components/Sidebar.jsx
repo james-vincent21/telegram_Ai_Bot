@@ -8,6 +8,8 @@ import {
   ShieldCheck,
   X,
   Sparkles,
+  LifeBuoy,
+  Megaphone,
 } from 'lucide-react';
 
 const menuItems = [
@@ -15,6 +17,8 @@ const menuItems = [
   { id: 'products', label: 'Brands & Plans', hint: 'Catalog & pricing', icon: Layers },
   { id: 'stock', label: 'Stock Inventory', hint: 'Credentials pool', icon: Database },
   { id: 'orders', label: 'Customer Orders', hint: 'Payments & delivery', icon: ShoppingCart },
+  { id: 'tickets', label: 'Support Tickets', hint: 'Customer help desk', icon: LifeBuoy },
+  { id: 'broadcast', label: 'Broadcast', hint: 'Message all users', icon: Megaphone },
 ];
 
 export default function Sidebar({ activeTab, setActiveTab, onLogout, user, mobileOpen, onClose }) {

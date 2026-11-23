@@ -35,6 +35,18 @@ function navRow(backAction) {
   return row;
 }
 
+/** Mini App URL, only when it's https (Telegram refuses anything else) */
+function shopUrl() {
+  const u = (process.env.SHOP_URL || "").trim();
+  return /^https:\/\//i.test(u) ? u : null;
+}
+
+/** "🛍 Open Shop" Mini App button, or null when no https SHOP_URL is set */
+function shopButton(style = BLUE) {
+  const u = shopUrl();
+  return u ? paint(Markup.button.webApp(strings.shopButton, u), style) : null;
+}
+
 function chunk(list, size) {
   const rows = [];
   for (let i = 0; i < list.length; i += size) rows.push(list.slice(i, i + size));
@@ -54,8 +66,10 @@ function mainMenuKeyboard() {
 
 /** Quick actions shown under the welcome message */
 function welcomeKeyboard() {
+  const shop = shopButton();
   return Markup.inlineKeyboard([
     [cb("⚡ Start Shopping", "new_buy", GREEN)],
+    ...(shop ? [[shop]] : []),
     [cb("🧾 My Orders", "open_orders", BLUE), cb("💬 Support", "open_support")],
     [cb("✖️ Exit", "nav_exit", RED)],
   ]);
@@ -147,9 +161,20 @@ function orderPaymentKeyboard(checkoutUrl, orderId, amount, currency) {
   ]);
 }
 
-/** Order history. Only unpaid orders can be removed. */
-function userOrdersKeyboard(pendingCount = 0) {
+/**
+ * Order history. Only unpaid orders can be removed.
+ * @param {number} pendingCount
+ * @param {Array} [toolOrders] - recent delivered orders that get Test / Memo buttons
+ */
+function userOrdersKeyboard(pendingCount = 0, toolOrders = []) {
   const rows = [];
+  for (const o of toolOrders) {
+    const short = o.orderId.slice(-4);
+    rows.push([
+      cb(`✅ Test #${short}`, `check_${o.orderId}`, GREEN),
+      cb(`🧾 Memo #${short}`, `memo_${o.orderId}`),
+    ]);
+  }
   if (pendingCount > 0) {
     rows.push([cb(`🗑 Clear Unpaid Orders · ${pendingCount}`, "user_clear_pending", RED)]);
   }
@@ -165,10 +190,73 @@ function userOrdersKeyboard(pendingCount = 0) {
  * Under delivery / payment messages. These open NEW messages so the
  * credentials message is never overwritten.
  */
-function afterDeliveryKeyboard() {
+function afterDeliveryKeyboard(orderId) {
+  const rows = [];
+  if (orderId) {
+    rows.push([cb("✅ Check Proxy", `check_${orderId}`, GREEN), cb("🧾 Get Memo", `memo_${orderId}`)]);
+  }
+  rows.push([cb("⚡ Buy Again", "new_buy", GREEN), cb("🧾 My Orders", "open_orders", BLUE)]);
+  rows.push([cb("🎫 Need help?", "ticket_new")]);
+  return Markup.inlineKeyboard(rows);
+}
+
+/** Under proxy-check results */
+function proxyCheckKeyboard(orderId, allOk) {
+  const rows = [[cb("🔄 Test Again", `check_${orderId}`, BLUE)]];
+  if (!allOk) rows.push([cb("🎫 Open a Ticket", "ticket_new", GREEN)]);
+  rows.push([cb("✖️ Close", "nav_exit", RED)]);
+  return Markup.inlineKeyboard(rows);
+}
+
+/** Under expiry reminders */
+function expiryReminderKeyboard(orderId) {
   return Markup.inlineKeyboard([
-    [cb("⚡ Buy Again", "new_buy", GREEN), cb("🧾 My Orders", "open_orders", BLUE)],
-    [cb("💬 Need help?", "open_support")],
+    [cb("🔄 Renew Now", `renew_${orderId}`, GREEN)],
+    [cb("✅ Check Proxy", `check_${orderId}`, BLUE), cb("🎫 Help", "ticket_new")],
+  ]);
+}
+
+// ---------- Support tickets ----------
+function ticketInputKeyboard() {
+  return Markup.inlineKeyboard([[cb("✖️ Cancel", "ticket_cancel_input", RED)]]);
+}
+
+function ticketCreatedKeyboard() {
+  return Markup.inlineKeyboard([
+    [cb("📂 My Tickets", "tickets_list", BLUE)],
+    navRow(),
+  ]);
+}
+
+function ticketsListKeyboard(tickets) {
+  const icon = { open: "🟡", answered: "🟢", closed: "⚫️" };
+  const rows = tickets.map((t) => [
+    cb(`${icon[t.status] || "⚪️"} ${t.ticketNo} · ${t.messages.length} msg`, `ticket_view_${t._id}`, t.status === "answered" ? GREEN : undefined),
+  ]);
+  rows.push([cb("🎫 New Ticket", "ticket_new", GREEN)]);
+  rows.push(navRow("open_support_edit"));
+  return Markup.inlineKeyboard(rows);
+}
+
+function ticketViewKeyboard(ticket) {
+  const rows = [];
+  if (ticket.status !== "closed") {
+    rows.push([
+      cb("💬 Reply", `ticket_reply_${ticket._id}`, GREEN),
+      cb("✅ Close Ticket", `ticket_close_${ticket._id}`, RED),
+    ]);
+  } else {
+    rows.push([cb("🎫 New Ticket", "ticket_new", GREEN)]);
+  }
+  rows.push(navRow("tickets_list"));
+  return Markup.inlineKeyboard(rows);
+}
+
+/** Sent with an admin reply (from the admin panel) */
+function ticketReplyKeyboard(ticketId) {
+  return Markup.inlineKeyboard([
+    [cb("💬 Reply", `ticket_reply_${ticketId}`, GREEN), cb("📂 View Ticket", `ticket_view_${ticketId}`, BLUE)],
+    [cb("✅ Close Ticket", `ticket_close_${ticketId}`, RED)],
   ]);
 }
 
@@ -188,11 +276,11 @@ function navKeyboard(backAction) {
 /** Support message actions */
 function supportKeyboard(contact, website = "https://ipdokan.com") {
   const handle = String(contact || "").replace(/^@/, "");
-  const rows = [];
-  if (/^[A-Za-z0-9_]{4,}$/.test(handle)) {
-    rows.push([url("💬 Chat with Support", `https://t.me/${handle}`, GREEN)]);
-  }
-  rows.push([url("🌐 Visit Website", website, BLUE)]);
+  const rows = [[cb("🎫 New Ticket", "ticket_new", GREEN), cb("📂 My Tickets", "tickets_list", BLUE)]];
+  const live = [];
+  if (/^[A-Za-z0-9_]{4,}$/.test(handle)) live.push(url("💬 Chat", `https://t.me/${handle}`));
+  live.push(url("🌐 Website", website));
+  rows.push(live);
   rows.push(navRow());
   return Markup.inlineKeyboard(rows);
 }
@@ -210,4 +298,13 @@ module.exports = {
   retryKeyboard,
   supportKeyboard,
   navKeyboard,
+  shopButton,
+  shopUrl,
+  proxyCheckKeyboard,
+  expiryReminderKeyboard,
+  ticketInputKeyboard,
+  ticketCreatedKeyboard,
+  ticketsListKeyboard,
+  ticketViewKeyboard,
+  ticketReplyKeyboard,
 };

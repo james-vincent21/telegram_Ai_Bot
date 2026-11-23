@@ -4,8 +4,13 @@ const strings = require("../config/strings");
 const keyboards = require("../keyboards");
 const animator = require("../stepAnimator");
 const woocommerce = require("../../services/woocommerce");
+const {
+  resolveItem,
+  maxQuantity,
+  createTelegramOrder,
+  OrderError,
+} = require("../../services/orderService");
 
-const MAX_QUANTITY = 50;
 
 /**
  * Registers or updates user activity in database
@@ -94,6 +99,34 @@ function registerCustomerHandlers(bot) {
   bot.action("open_support", async (ctx) => {
     await ctx.answerCbQuery();
     return showSupport(ctx);
+  });
+  // Same, but replaces the current message (Back from My Tickets)
+  bot.action("open_support_edit", async (ctx) => {
+    await ctx.answerCbQuery();
+    const contact = process.env.SUPPORT_CONTACT || "@ipdokan";
+    return ctx
+      .editMessageText(strings.support(contact), {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+        ...keyboards.supportKeyboard(contact),
+      })
+      .catch(() => showSupport(ctx));
+  });
+
+  // 🔄 Renew (from the expiry reminder): open the same package's quantity screen
+  bot.action(/^renew_(.+)$/, async (ctx) => {
+    const order = await Order.findOne({ orderId: ctx.match[1], telegramId: ctx.from.id });
+    if (!order || !order.wooProductId) {
+      await ctx.answerCbQuery();
+      return showAllCategories(ctx);
+    }
+    await ctx.answerCbQuery("Loading package...");
+    try {
+      return await showQuantity(ctx, String(order.wooProductId), order.wooVariationId || 0, order.quantity || 1);
+    } catch (err) {
+      console.error("[Renew]", err.message);
+      return showAllCategories(ctx);
+    }
   });
 
   // Step 1: User taps "Buy Proxy" or /buy -> Fetch & display ALL categories from WooCommerce
@@ -213,39 +246,6 @@ function registerCustomerHandlers(bot) {
     });
   });
 
-  // Resolves product + selected package (variationId 0 = simple product)
-  async function resolveItem(productId, variationId, prefetched = {}) {
-    const product = prefetched.product || (await woocommerce.getProduct(productId));
-    if (!variationId) {
-      return {
-        product,
-        name: "Standard",
-        price: parseFloat(product.price) || 0,
-        inStock: product.stock_status === "instock",
-        stockQuantity: product.stock_quantity ?? null,
-      };
-    }
-    const variations = await woocommerce.getProductVariations(productId);
-    const selectedVar = variations.find(
-      (v) => String(v.id) === String(variationId),
-    );
-    if (!selectedVar) return null;
-    return {
-      product,
-      name: selectedVar.name,
-      price: parseFloat(selectedVar.price) || 0,
-      inStock: selectedVar.inStock,
-      stockQuantity: selectedVar.stockQuantity ?? null,
-    };
-  }
-
-  function maxQuantity(item) {
-    return item.stockQuantity > 0
-      ? Math.min(MAX_QUANTITY, item.stockQuantity)
-      : MAX_QUANTITY;
-  }
-
-  // Step 5: show the quantity selector for a package
   // Where "Back" goes from the quantity / sold-out screens
   function backFrom(productId, variationId, categoryId) {
     if (!categoryId || categoryId === "0") return "back_to_cats";
@@ -327,67 +327,26 @@ function registerCustomerHandlers(bot) {
     const back = backFrom(productId, ctx.match[2], ctx.match[4] || "0");
 
     try {
-      const item = await resolveItem(productId, variationId);
-      if (!item) {
-        return ctx.editMessageText("😕 <b>This package could not be found.</b>\n\nPlease pick another one.", {
-          parse_mode: "HTML",
-          ...keyboards.navKeyboard(back),
-        });
-      }
-      if (!item.inStock) {
-        return ctx.editMessageText(strings.outOfStockAlert, {
-          parse_mode: "HTML",
-          ...keyboards.navKeyboard(back),
-        });
-      }
-
-      const quantity = Math.min(
-        maxQuantity(item),
-        Math.max(1, parseInt(ctx.match[3], 10)),
-      );
-      const { product } = item;
-      const timestamp = Date.now().toString().slice(-6);
-      const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-      const orderId = `ORD-${timestamp}-${randomSuffix}`;
-      const total = Math.round(item.price * quantity * 100) / 100;
-
-      // Create Order in WooCommerce
-      const wooResult = await woocommerce.createOrder({
-        telegramId: ctx.from.id,
-        telegramUsername: ctx.from.username || "",
-        firstName: ctx.from.first_name || "",
+      const { order, item, total, paymentUrl } = await createTelegramOrder({
+        from: ctx.from,
         productId,
         variationId,
-        quantity,
-        note: `Order from Telegram: @${ctx.from.username || ctx.from.id}`,
+        quantity: ctx.match[3],
       });
-
-      // Save order in local MongoDB
-      await Order.create({
-        orderId,
-        wooOrderId: String(wooResult.id),
-        wooProductId: parseInt(productId, 10),
-        wooVariationId: variationId ? parseInt(variationId, 10) : null,
-        productName: product.name,
-        variationName: item.name,
-        proxyType: product.name.toUpperCase().includes("GB") ? "gb" : "ip",
-        telegramId: ctx.from.id,
-        telegramUsername: ctx.from.username || "",
-        telegramFirstName: ctx.from.first_name || "",
-        quantity,
-        unitPrice: item.price,
-        amount: total,
-        currency: "BDT",
-        gatewayRedirectUrl: wooResult.paymentUrl,
-        status: "pending",
-      });
-
       return await animator.edit(
         ctx,
-        strings.orderSummary(product.name, item.name, total, "BDT", orderId, quantity),
-        keyboards.orderPaymentKeyboard(wooResult.paymentUrl, orderId, total, "BDT"),
+        strings.orderSummary(item.product.name, item.name, total, "BDT", order.orderId, order.quantity),
+        keyboards.orderPaymentKeyboard(paymentUrl, order.orderId, total, "BDT"),
       );
     } catch (err) {
+      if (err instanceof OrderError) {
+        return ctx.editMessageText(
+          err.code === "out_of_stock"
+            ? strings.outOfStockAlert
+            : "😕 <b>This package could not be found.</b>\n\nPlease pick another one.",
+          { parse_mode: "HTML", ...keyboards.navKeyboard(back) },
+        );
+      }
       console.error("[OrderCreation Error]:", err.message);
       return ctx.editMessageText(strings.orderCreateError, {
         parse_mode: "HTML",
@@ -427,7 +386,7 @@ function registerCustomerHandlers(bot) {
     const view = await getOrdersView(ctx.from.id);
     return ctx.reply(view.text, {
       parse_mode: "HTML",
-      ...keyboards.userOrdersKeyboard(view.pendingCount),
+      ...keyboards.userOrdersKeyboard(view.pendingCount, view.toolOrders),
     });
   }
 
@@ -437,7 +396,7 @@ function registerCustomerHandlers(bot) {
     try {
       return await ctx.editMessageText(view.text, {
         parse_mode: "HTML",
-        ...keyboards.userOrdersKeyboard(view.pendingCount),
+        ...keyboards.userOrdersKeyboard(view.pendingCount, view.toolOrders),
       });
     } catch (err) {
       // Nothing changed since the last refresh
@@ -476,7 +435,7 @@ function registerCustomerHandlers(bot) {
         cancelledCount ? `${strings.userOrdersCleared(cancelledCount)}\n\n${view.text}` : view.text,
         {
           parse_mode: "HTML",
-          ...keyboards.userOrdersKeyboard(view.pendingCount),
+          ...keyboards.userOrdersKeyboard(view.pendingCount, view.toolOrders),
         },
       );
     } catch (err) {
@@ -497,8 +456,10 @@ function registerCustomerHandlers(bot) {
     });
 
     if (orders.length === 0) {
-      return { text: strings.noOrders, pendingCount };
+      return { text: strings.noOrders, pendingCount, toolOrders: [] };
     }
+    // Test / Memo buttons for the 3 most recent delivered orders
+    const toolOrders = orders.filter((o) => o.status === "delivered" && o.deliveredCredentials).slice(0, 3);
 
     let text = strings.myOrdersHeader;
     for (const ord of orders) {
@@ -508,7 +469,7 @@ function registerCustomerHandlers(bot) {
         ord.variationName || "Package",
       );
     }
-    return { text, pendingCount };
+    return { text, pendingCount, toolOrders };
   }
 
   async function cancelPendingOrder(orderId, telegramId) {

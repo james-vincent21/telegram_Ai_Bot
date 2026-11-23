@@ -7,12 +7,17 @@ const connectDB = require('./db');
 
 const webhookRoutes = require('./routes/webhook');
 const apiRoutes = require('./routes/api');
+const shopRoutes = require('./routes/shop');
+const mongoose = require('mongoose');
+const broadcastService = require('../services/broadcast');
 
 const app = express();
 const PORT = process.env.PORT || 5001;
 
 // Connect to MongoDB
 connectDB();
+// Broadcasts cut off by a restart are marked so the admin can see it
+mongoose.connection.once('open', () => broadcastService.markInterrupted());
 
 // Global Middlewares
 app.use(cors());
@@ -29,7 +34,11 @@ app.get('/health', (req, res) => {
 
 // Mount Routes
 app.use('/', webhookRoutes);
+app.use('/shop-api', shopRoutes);
 app.use('/api', apiRoutes);
+
+// Telegram Mini App shop (needs an https address; set SHOP_URL=https://your-domain/shop/)
+app.use('/shop', express.static(path.join(__dirname, 'public/shop')));
 
 // Optional: Serve static build of admin panel in production if exists
 const adminBuildPath = path.join(__dirname, '../admin-panel/dist');

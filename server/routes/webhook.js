@@ -10,6 +10,7 @@ const stockService = require("../../services/stockService");
 const notifyAdminService = require("../../services/notifyAdmin");
 const strings = require("../../bot/config/strings");
 const keyboards = require("../../bot/keyboards");
+const { sendReceipt } = require("../../services/receipt");
 const { bot } = require("../../bot/index");
 
 /**
@@ -45,7 +46,7 @@ async function sendDelivery(chatId, productName, variationName, credentials, ord
     const isLast = i === chunks.length - 1;
     await bot.telegram.sendMessage(chatId, text, {
       parse_mode: "HTML",
-      ...(isLast ? keyboards.afterDeliveryKeyboard() : {}),
+      ...(isLast ? keyboards.afterDeliveryKeyboard(order.orderId) : {}),
     });
   }
 }
@@ -244,6 +245,11 @@ router.post("/webhook/woocommerce", async (req, res) => {
       // Alert Admin on Telegram
       await notifyAdminService.notifyWooOrderPaid(wooOrder, order);
     }
+
+    // PDF payment memo (sent once per order, even if the webhook repeats)
+    if (telegramId) {
+      await sendReceipt(bot.telegram, order).catch((e) => console.error("[Receipt]", e.message));
+    }
   } catch (err) {
     console.error("❌ [WooCommerce Webhook] Error processing order:", err);
   }
@@ -341,6 +347,7 @@ router.post("/webhook/payment-ipn", async (req, res) => {
         );
       }
 
+      await sendReceipt(bot.telegram, order).catch((e) => console.error("[Receipt]", e.message));
       await notifyAdminService.notifyOrderDelivered(order, brand, plan);
       return res
         .status(200)
@@ -359,6 +366,7 @@ router.post("/webhook/payment-ipn", async (req, res) => {
         console.error(`❌ [Fulfillment] Telegram send error:`, tgErr.message);
       }
 
+      await sendReceipt(bot.telegram, order).catch((e) => console.error("[Receipt]", e.message));
       await notifyAdminService.notifyOutOfStock(order, brand, plan);
       return res
         .status(200)

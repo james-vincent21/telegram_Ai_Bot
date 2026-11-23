@@ -7,12 +7,16 @@ import Dashboard from './pages/Dashboard';
 import Products from './pages/Products';
 import Stock from './pages/Stock';
 import Orders from './pages/Orders';
+import Tickets from './pages/Tickets';
+import Broadcast from './pages/Broadcast';
 
 const TAB_TITLES = {
   dashboard: 'Dashboard',
   products: 'Brands & Plans',
   stock: 'Stock Inventory',
   orders: 'Customer Orders',
+  tickets: 'Support Tickets',
+  broadcast: 'Broadcast',
 };
 
 export default function App() {
@@ -106,6 +110,8 @@ export default function App() {
           {activeTab === 'products' && <Products />}
           {activeTab === 'stock' && <Stock />}
           {activeTab === 'orders' && <Orders />}
+          {activeTab === 'tickets' && <Tickets />}
+          {activeTab === 'broadcast' && <Broadcast />}
         </div>
       </main>
     </div>
