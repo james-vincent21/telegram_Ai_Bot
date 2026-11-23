@@ -58,7 +58,7 @@ module.exports = {
     `Choose a brand or product:`,
   selectPlan: (productName) =>
     `📦 <b>CHOOSE A PACKAGE</b>\n<i>for ${productName}</i>\n\n${steps(3)}\n${LINE}\n\n` +
-    `Choose a package. <i>🟢 green = in stock · 🔴 red = sold out</i>`,
+    `Choose a package.\n<i>🟢 10+ in stock · 🟡 fewer than 10 left · 🔴 sold out</i>`,
   selectQuantity: (productName, planLabel, unitPrice, quantity, currency) =>
     `🔢 <b>CHOOSE QUANTITY</b>\n<i>${productName}</i>\n\n${steps(4)}\n${LINE}\n\n` +
     `📦 <b>Package:</b> ${planLabel}\n` +

@@ -23,12 +23,13 @@ const key = (text, style) => paint({ text }, style);
 
 /**
  * Standard navigation row on every screen:
- *   ‹ Back (blue) · 🏠 Home (green) · ✖️ Exit (red)
+ *   🟡 ‹ Back (yellow marker) · 🏠 Home (green) · ✖️ Exit (red)
  * @param {string} [backAction] - callback for Back; omit to hide it
  */
 function navRow(backAction) {
   const row = [];
-  if (backAction) row.push(cb("‹ Back", backAction, BLUE));
+  // Telegram has no yellow button color, so "yellow" = 🟡 marker on a plain button
+  if (backAction) row.push(cb("🟡 ‹ Back", backAction));
   row.push(cb("🏠 Home", "go_home", GREEN));
   row.push(cb("✖️ Exit", "nav_exit", RED));
   return row;
@@ -85,14 +86,27 @@ function productsKeyboard(products, categoryId) {
   return Markup.inlineKeyboard(rows);
 }
 
-/** Packages / variations: green = available, red = sold out */
+const LOW_STOCK = 10;
+
+/**
+ * Packages / variations, colored by stock:
+ *   10 or more (or unlimited) → 🟢 green
+ *   1–9 left                  → 🟡 yellow marker (Telegram has no yellow button)
+ *   0 / sold out              → 🔴 red
+ */
 function variationsKeyboard(variations, productId, categoryId) {
   const rows = variations.map((v) => {
-    if (v.inStock) {
-      const stockBadge = v.stockQuantity ? ` · ${v.stockQuantity} left` : "";
-      return [cb(`⚡ ${v.name}  ·  ${v.price} ৳${stockBadge}`, `var_${productId}_${v.id}_${categoryId}`, GREEN)];
+    const qty = v.stockQuantity;
+    const soldOut = !v.inStock || qty === 0;
+    if (soldOut) {
+      return [cb(`🔴 ${v.name}  ·  Sold out`, `outofstock_${v.id}`, RED)];
     }
-    return [cb(`🚫 ${v.name}  ·  Sold out`, `outofstock_${v.id}`, RED)];
+    const data = `var_${productId}_${v.id}_${categoryId}`;
+    if (qty != null && qty < LOW_STOCK) {
+      return [cb(`🟡 ${v.name}  ·  ${v.price} ৳ · only ${qty} left`, data)];
+    }
+    const badge = qty != null ? ` · ${qty} left` : "";
+    return [cb(`🟢 ${v.name}  ·  ${v.price} ৳${badge}`, data, GREEN)];
   });
   rows.push(navRow(`cat_${categoryId}`));
   return Markup.inlineKeyboard(rows);
