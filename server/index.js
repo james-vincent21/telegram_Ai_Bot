@@ -81,11 +81,14 @@ setInterval(syncCatalog, SYNC_EVERY_MS).unref();
 const Order = require('../models/Order');
 const { checkOrderPayment } = require('./routes/webhook');
 let paymentCheckRunning = false;
+let paymentTick = 0;
 async function checkPendingPayments() {
   if (paymentCheckRunning) return;
   paymentCheckRunning = true;
   try {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    // Every 15 s for orders from the last 30 min; every minute for older ones (up to 24 h)
+    const fresh = paymentTick++ % 4 !== 0;
+    const since = new Date(Date.now() - (fresh ? 30 * 60 * 1000 : 24 * 60 * 60 * 1000));
     const pending = await Order.find({
       paymentGateway: { $in: ['zinipay', 'cryptomus'] },
       status: 'pending',
@@ -103,6 +106,6 @@ async function checkPendingPayments() {
     paymentCheckRunning = false;
   }
 }
-setInterval(checkPendingPayments, 60 * 1000).unref();
+setInterval(checkPendingPayments, 15 * 1000).unref();
 
 module.exports = app;

@@ -386,7 +386,7 @@ async function releaseInvoice(order, raw, source) {
  * ZiniPay webhook: called after a payment update with invoice_id (query or body).
  * URL (set per invoice): <APP_BASE_URL>/webhook/zinipay?order_id=<orderId>
  */
-router.all("/webhook/zinipay", async (req, res) => {
+router.all(["/webhook/zinipay", "/tg-bot/zinipay-webhook"], async (req, res) => {
   const invoiceId = String(req.body?.invoice_id || req.query.invoice_id || "");
   const orderId = String(req.query.order_id || req.body?.order_id || "");
   console.log(`🔔 [ZiniPay Webhook] invoice=${invoiceId} order=${orderId}`);
@@ -443,7 +443,7 @@ async function checkOrderPayment(order) {
  * Cryptomus webhook: POSTed on every invoice status change.
  * The signature is checked, but the status is always re-read from Cryptomus.
  */
-router.post("/webhook/cryptomus", async (req, res) => {
+router.post(["/webhook/cryptomus", "/tg-bot/cryptomus-webhook"], async (req, res) => {
   const body = req.body && typeof req.body === "object" ? req.body : {};
   const cryptomusId = typeof body.order_id === "string" ? body.order_id : "";
   if (!cryptomus.webhookSignatureValid(body)) {
@@ -620,7 +620,16 @@ function renderCheckoutPage(order) {
 }
 
 // Helper to render return page
-function renderReturnPage({ title, statusText, subText, isSuccess, orderId }) {
+/** https://t.me/<bot username> (cached), for "Open Telegram" buttons */
+let botUrlCache = null;
+async function botLink() {
+  if (botUrlCache) return botUrlCache;
+  const name = (process.env.BOT_USERNAME || "").replace(/^@/, "") || (await bot.telegram.getMe().then((me) => me.username).catch(() => ""));
+  botUrlCache = name ? `https://t.me/${name}` : "https://t.me";
+  return botUrlCache;
+}
+
+function renderReturnPage({ title, statusText, subText, isSuccess, orderId, botUrl = "https://t.me", retryUrl = null, refresh = false }) {
   const primaryColor = isSuccess ? "#10B981" : "#EF4444";
   const icon = isSuccess ? "✅" : "❌";
   return `
@@ -629,7 +638,7 @@ function renderReturnPage({ title, statusText, subText, isSuccess, orderId }) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title}</title>
+  <title>${title}</title>${refresh ? '\n  <meta http-equiv="refresh" content="4">' : ""}
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body { background-color: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
@@ -648,7 +657,8 @@ function renderReturnPage({ title, statusText, subText, isSuccess, orderId }) {
     <h1>${statusText}</h1>
     <p>${subText}</p>
     ${orderId ? `<div class="badge">Order ID: ${orderId}</div><br/>` : ""}
-    <a href="https://t.me" class="btn">Return to Telegram</a>
+    ${retryUrl ? `<a href="${retryUrl}" class="btn" style="background:#059669;margin-bottom:10px;display:block">💳 Pay again</a>` : ""}
+    <a href="${botUrl}" class="btn">Open Telegram</a>
   </div>
 </body>
 </html>
@@ -656,23 +666,27 @@ function renderReturnPage({ title, statusText, subText, isSuccess, orderId }) {
 }
 
 // Payment Redirection Routes
-router.all("/payment/success", async (req, res) => {
-  const orderId = req.query.order_id || req.body?.value_a || "";
-  // ZiniPay / Cryptomus: confirm with the gateway now instead of waiting for the webhook
-  if (orderId) {
-    const order = await Order.findOne({ orderId: String(orderId), status: "pending" }).catch(() => null);
-    if (order) await checkOrderPayment(order).catch((e) => console.error("[Success check]", e.message));
+// Also reachable as https://<shop domain>/tg-bot/paid (nginx), because gateways
+// only accept return URLs on the shop's own domain.
+router.all(["/payment/success", "/tg-bot/paid"], async (req, res) => {
+  const orderId = String(req.query.order_id || req.body?.value_a || "");
+  let order = orderId ? await Order.findOne({ orderId }).catch(() => null) : null;
+  // Confirm with the gateway right now instead of waiting for its webhook / the poll
+  if (order?.status === "pending" && order.paymentGateway) {
+    await checkOrderPayment(order).catch((e) => console.error("[Success check]", e.message));
+    order = await Order.findById(order._id).catch(() => order);
   }
-  res.send(
-    renderReturnPage({
-      title: "Payment Successful",
-      statusText: "Payment Received Successfully!",
-      subText:
-        "Your payment was confirmed. Your proxy credentials have been delivered directly to your Telegram chat.",
-      isSuccess: true,
-      orderId,
-    }),
-  );
+  const bot = await botLink();
+  const s = order?.status;
+  const view =
+    s === "delivered"
+      ? { statusText: "Payment received ✅", subText: "Your proxy has been sent to your Telegram chat." }
+      : ["paid", "stock_pending", "processing", "completed"].includes(s)
+        ? { statusText: "Payment received ✅", subText: "We're preparing your proxy — it will arrive in your Telegram chat shortly." }
+        : s === "pending"
+          ? { statusText: "Confirming your payment…", subText: "This usually takes a few seconds. Your proxy will appear in your Telegram chat as soon as it's confirmed.", refresh: true }
+          : { statusText: "Payment Received Successfully!", subText: "Your proxy will be delivered to your Telegram chat." };
+  res.send(renderReturnPage({ title: "Payment", isSuccess: s !== "pending", orderId, botUrl: bot, ...view }));
 });
 
 router.all("/payment/fail", (req, res) => {
@@ -689,16 +703,26 @@ router.all("/payment/fail", (req, res) => {
   );
 });
 
-router.all("/payment/cancel", (req, res) => {
-  const orderId = req.query.order_id || req.body?.value_a || "";
+router.all(["/payment/cancel", "/tg-bot/cancel"], async (req, res) => {
+  const orderId = String(req.query.order_id || req.body?.value_a || "");
+  let order = orderId ? await Order.findOne({ orderId }).catch(() => null) : null;
+  // Drop the cancelled invoice now (or deliver, if it was actually paid)
+  if (order?.status === "pending" && order.paymentGateway) {
+    await checkOrderPayment(order).catch((e) => console.error("[Cancel check]", e.message));
+    order = await Order.findById(order._id).catch(() => order);
+  }
+  if (order && ["delivered", "paid", "stock_pending"].includes(order.status)) {
+    return res.redirect(302, `/payment/success?order_id=${encodeURIComponent(orderId)}`);
+  }
   res.send(
     renderReturnPage({
       title: "Payment Cancelled",
       statusText: "Payment Cancelled",
-      subText:
-        "You cancelled the checkout session. Feel free to resume when you are ready.",
+      subText: "No money was taken. You can pay again whenever you're ready.",
       isSuccess: false,
       orderId,
+      botUrl: await botLink(),
+      retryUrl: order?.status === "pending" ? orderService.payLink(order.orderId) : null,
     }),
   );
 });

@@ -79,6 +79,8 @@ function cryptomusOrderId(order) {
 async function createInvoice(order) {
   const appBaseUrl = (process.env.APP_BASE_URL || "http://localhost:5001").replace(/\/$/, "");
   const returnBase = (process.env.CRYPTOMUS_RETURN_URL || process.env.ZINIPAY_REDIRECT_URL || `${appBaseUrl}/payment/success`).trim();
+  // "Back" button on the Cryptomus page
+  const cancelBase = (process.env.CRYPTOMUS_CANCEL_URL || process.env.ZINIPAY_CANCEL_URL || returnBase).trim();
   const withOrder = (u) => `${u}${u.includes("?") ? "&" : "?"}order_id=${encodeURIComponent(order.orderId)}`;
 
   const cmOrderId = cryptomusOrderId(order);
@@ -86,7 +88,7 @@ async function createInvoice(order) {
     amount: Number(order.amountUsd).toFixed(2),
     currency: "USD",
     order_id: cmOrderId,
-    url_return: withOrder(returnBase),
+    url_return: withOrder(cancelBase),
     url_success: withOrder(returnBase),
     // Cryptomus refuses some callback hosts ("Request contains forbidden input"),
     // e.g. *.sslip.io, so the callback can be routed through the shop's domain.

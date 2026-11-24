@@ -76,7 +76,7 @@ async function createInvoice(order, customer = {}) {
     metadata: { order_id: order.orderId, telegram_id: String(order.telegramId) },
     redirect_url: withOrder(redirectBase),
     cancel_url: withOrder(cancelBase),
-    webhook_url: `${appBaseUrl}/webhook/zinipay?${orderParam}`,
+    webhook_url: withOrder((process.env.ZINIPAY_WEBHOOK_URL || `${appBaseUrl}/webhook/zinipay`).trim()),
   });
 
   const paymentUrl = data?.payment_url;

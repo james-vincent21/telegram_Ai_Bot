@@ -245,8 +245,11 @@ async function ensureBrandPlan(productId, variantId) {
   const p = await findRawProduct(productId);
   if (!p) return { brand: null, plan: null };
   const v = findRawVariant(p, variantId);
-  let plan = v ? await Plan.findOne({ ipdokanVariantId: v.id }) : null;
-  let brand = await Brand.findOne({ ipdokanProductId: p.id });
+  // In parallel: the database is a network round trip away
+  let [plan, brand] = await Promise.all([
+    v ? Plan.findOne({ ipdokanVariantId: v.id }) : null,
+    Brand.findOne({ ipdokanProductId: p.id }),
+  ]);
   if (!brand || (v && !plan)) {
     const r = await syncProduct(p);
     brand = r.brand;

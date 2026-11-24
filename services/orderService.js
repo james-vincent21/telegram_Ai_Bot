@@ -193,11 +193,27 @@ async function createTelegramOrder({ from, productId, variationId, quantity, loc
  * started with, so the customer can never pay the same order twice.
  * @returns {Promise<{order, paymentUrl: string, amount: number, currency: string}>}
  */
-async function startPayment(orderId, telegramId, gateway) {
+async function startPayment(orderId, telegramId, gateway, attempt = 0) {
   if (!GATEWAYS[gateway] || !GATEWAYS[gateway].configured()) {
     throw new OrderError("gateway", "This payment method is not available.");
   }
-  let order = await Order.findOne({ orderId: String(orderId), telegramId });
+  // Fast path: lock the method in one round trip (pending, no method yet, has a price for it)
+  const priceField = GATEWAYS[gateway].currency === "USD" ? "amountUsd" : "amount";
+  let order = await Order.findOneAndUpdate(
+    {
+      orderId: String(orderId),
+      telegramId,
+      status: "pending",
+      paymentGateway: { $in: ["", null] },
+      [priceField]: { $gt: 0 },
+    },
+    { $set: { paymentGateway: gateway, gatewayTransactionId: `${orderId}-${crypto.randomBytes(4).toString("hex")}` } },
+    { new: true },
+  );
+  if (order) return createGatewayInvoice(order, gateway);
+
+  // Slow path: find out why (already started, paid, not found, …)
+  order = await Order.findOne({ orderId: String(orderId), telegramId });
   if (!order) throw new OrderError("not_found", "This order could not be found.");
   if (order.status !== "pending") throw new OrderError("not_pending", "This order is no longer waiting for payment.");
 
@@ -212,21 +228,27 @@ async function startPayment(orderId, telegramId, gateway) {
   if (order.paymentGateway === gateway && order.gatewayRedirectUrl) {
     return { order, paymentUrl: order.gatewayRedirectUrl, ...charge };
   }
+  if (order.paymentGateway === gateway && !order.gatewayRedirectUrl) {
+    // Another tap is creating the invoice right now — or one was interrupted
+    // (e.g. a restart). Take over a lock older than 30 s; otherwise ask to retry.
+    if (attempt === 0 && Date.now() - new Date(order.updatedAt).getTime() > 30 * 1000) {
+      const stale = await Order.findOneAndUpdate(
+        { _id: order._id, status: "pending", paymentGateway: gateway, gatewayRedirectUrl: null, updatedAt: order.updatedAt },
+        { $set: { paymentGateway: gateway, gatewayTransactionId: `${order.orderId}-${crypto.randomBytes(4).toString("hex")}` } },
+        { new: true },
+      );
+      if (stale) return createGatewayInvoice(stale, gateway);
+    }
+    throw new OrderError("gateway", "Your payment link is being prepared — please try again in a few seconds.");
+  }
+  // Method was released meanwhile (cancelled invoice): try the fast path once more
+  if (attempt === 0) return startPayment(orderId, telegramId, gateway, 1);
+  throw new OrderError("gateway", "Please try again in a few seconds.");
+}
 
-  // Lock the gateway first (atomically) so two taps can't create two invoices
-  order = await Order.findOneAndUpdate(
-    { _id: order._id, status: "pending", paymentGateway: { $in: ["", null] } },
-    {
-      $set: {
-        paymentGateway: gateway,
-        // SSLCommerz uses this as tran_id; ZiniPay / Cryptomus replace it below
-        gatewayTransactionId: `${order.orderId}-${crypto.randomBytes(4).toString("hex")}`,
-      },
-    },
-    { new: true },
-  );
-  if (!order) return startPayment(orderId, telegramId, gateway); // another tap won the race
-
+/** Creates the invoice for an order already locked to `gateway`. */
+async function createGatewayInvoice(order, gateway) {
+  const charge = chargeFor(order, gateway);
   const customer = { name: order.telegramFirstName || order.telegramUsername || `User ${order.telegramId}` };
   let session;
   try {
@@ -248,7 +270,10 @@ async function startPayment(orderId, telegramId, gateway) {
 
   order.gatewayRedirectUrl = session.redirectUrl;
   if (session.invoiceId && gateway !== "sslcommerz") order.gatewayTransactionId = session.invoiceId;
-  await order.save();
+  await Order.updateOne(
+    { _id: order._id },
+    { $set: { gatewayRedirectUrl: order.gatewayRedirectUrl, gatewayTransactionId: order.gatewayTransactionId } },
+  );
   console.log(`[Payment] ${gateway} invoice for ${order.orderId}: ${charge.amount} ${charge.currency}`);
   return { order, paymentUrl: session.redirectUrl, ...charge };
 }
