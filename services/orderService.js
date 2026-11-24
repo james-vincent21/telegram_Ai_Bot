@@ -12,6 +12,7 @@ const catalog = require("./ipdokan");
 const paymentService = require("./payment");
 const zinipay = require("./zinipay");
 const cryptomus = require("./cryptomus");
+const site = require("./siteOrders");
 
 /** Payment methods shown to customers, in display order. */
 const GATEWAYS = {
@@ -193,7 +194,7 @@ async function createTelegramOrder({ from, productId, variationId, quantity, loc
  * started with, so the customer can never pay the same order twice.
  * @returns {Promise<{order, paymentUrl: string, amount: number, currency: string}>}
  */
-async function startPayment(orderId, telegramId, gateway, attempt = 0) {
+async function startPayment(orderId, telegramId, gateway, attempt = 0, opts = {}) {
   if (!GATEWAYS[gateway] || !GATEWAYS[gateway].configured()) {
     throw new OrderError("gateway", "This payment method is not available.");
   }
@@ -210,7 +211,7 @@ async function startPayment(orderId, telegramId, gateway, attempt = 0) {
     { $set: { paymentGateway: gateway, gatewayTransactionId: `${orderId}-${crypto.randomBytes(4).toString("hex")}` } },
     { new: true },
   );
-  if (order) return createGatewayInvoice(order, gateway);
+  if (order) return createGatewayInvoice(order, gateway, opts);
 
   // Slow path: find out why (already started, paid, not found, …)
   order = await Order.findOne({ orderId: String(orderId), telegramId });
@@ -237,17 +238,65 @@ async function startPayment(orderId, telegramId, gateway, attempt = 0) {
         { $set: { paymentGateway: gateway, gatewayTransactionId: `${order.orderId}-${crypto.randomBytes(4).toString("hex")}` } },
         { new: true },
       );
-      if (stale) return createGatewayInvoice(stale, gateway);
+      if (stale) return createGatewayInvoice(stale, gateway, opts);
     }
     throw new OrderError("gateway", "Your payment link is being prepared — please try again in a few seconds.");
   }
   // Method was released meanwhile (cancelled invoice): try the fast path once more
-  if (attempt === 0) return startPayment(orderId, telegramId, gateway, 1);
+  if (attempt === 0) return startPayment(orderId, telegramId, gateway, 1, opts);
   throw new OrderError("gateway", "Please try again in a few seconds.");
 }
 
+/** Unlocks the payment method (and releases the website reservation) after a failure. */
+async function unlockPayment(order, raw) {
+  if (order.siteOrderId) await site.cancel(order.siteOrderId).catch(() => {});
+  await Order.updateOne(
+    { _id: order._id, status: "pending" },
+    { $set: { paymentGateway: "", siteOrderId: null, siteCurrency: "", gatewayResponse: raw || null } },
+  );
+}
+
+/**
+ * ipdokan.com products: create the order in the website's store first, so its
+ * inventory reserves the codes (and its stock goes down). Its amount is used
+ * for the invoice, so both sides always agree.
+ */
+async function ensureSiteOrder(order, gateway, opts = {}) {
+  if (!site.isConfigured() || !site.isSiteProduct(order.wooProductId)) return order;
+  const currency = GATEWAYS[gateway].currency;
+  if (order.siteOrderId && order.siteCurrency === currency) return order;
+  if (order.siteOrderId) await site.cancel(order.siteOrderId).catch(() => {});
+
+  const r = await site.create({
+    telegramId: order.telegramId,
+    name: order.telegramFirstName || order.telegramUsername || "",
+    productId: order.wooProductId,
+    variantId: order.wooVariationId,
+    locationId: order.locationId,
+    quantity: order.quantity,
+    currency,
+    whitelistIp: opts.ip,
+  });
+  if (!r.ok) {
+    await unlockPayment(order, { error: r.error });
+    console.error(`[Site] Order for ${order.orderId} not created (${r.status}):`, r.error);
+    throw new OrderError(r.status === 409 ? "out_of_stock" : "gateway", r.error || "This package is not available right now.");
+  }
+  const amountField = currency === "USD" ? "amountUsd" : "amount";
+  order.siteOrderId = r.order.id;
+  order.siteCurrency = currency;
+  order[amountField] = Number(r.order.amount);
+  await Order.updateOne(
+    { _id: order._id },
+    { $set: { siteOrderId: order.siteOrderId, siteCurrency: currency, [amountField]: order[amountField] } },
+  );
+  console.log(`[Site] ${order.orderId} → ipdokan.com order ${order.siteOrderId} (${order[amountField]} ${currency})`);
+  return order;
+}
+
 /** Creates the invoice for an order already locked to `gateway`. */
-async function createGatewayInvoice(order, gateway) {
+async function createGatewayInvoice(order, gateway, opts = {}) {
+  order = await ensureSiteOrder(order, gateway, opts);
   const charge = chargeFor(order, gateway);
   const customer = { name: order.telegramFirstName || order.telegramUsername || `User ${order.telegramId}` };
   let session;
@@ -260,10 +309,7 @@ async function createGatewayInvoice(order, gateway) {
   }
   if (!session.success || !session.redirectUrl) {
     // Unlock so the customer can retry or pick another method
-    await Order.updateOne(
-      { _id: order._id, status: "pending" },
-      { $set: { paymentGateway: "", gatewayResponse: session.raw || { error: session.error } } },
-    );
+    await unlockPayment(order, session.raw || { error: session.error });
     console.error(`[Payment] ${gateway} invoice failed for ${order.orderId}:`, session.error);
     throw new Error(`Payment link could not be created: ${session.error}`);
   }
@@ -274,6 +320,7 @@ async function createGatewayInvoice(order, gateway) {
     { _id: order._id },
     { $set: { gatewayRedirectUrl: order.gatewayRedirectUrl, gatewayTransactionId: order.gatewayTransactionId } },
   );
+  if (order.siteOrderId) site.started(order.siteOrderId, gateway === "cryptomus" ? 120 : 0).catch(() => {});
   console.log(`[Payment] ${gateway} invoice for ${order.orderId}: ${charge.amount} ${charge.currency}`);
   return { order, paymentUrl: session.redirectUrl, ...charge };
 }

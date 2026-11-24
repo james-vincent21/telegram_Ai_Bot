@@ -8,6 +8,7 @@ const User = require("../../models/User");
 const paymentService = require("../../services/payment");
 const zinipay = require("../../services/zinipay");
 const orderService = require("../../services/orderService");
+const site = require("../../services/siteOrders");
 const cryptomus = require("../../services/cryptomus");
 const stockService = require("../../services/stockService");
 const notifyAdminService = require("../../services/notifyAdmin");
@@ -300,13 +301,25 @@ async function fulfillPaidOrder(order, { amount, expected, raw, source }) {
   const brandName = order.productName || brand?.name || "Proxy Provider";
   const planLabel = order.variationName || plan?.label || "Proxy Plan";
 
-  const claimedItems = await stockService.assignStockToOrder(order);
+  // ipdokan.com products: the website marks its reserved codes sold and returns them
+  let codes = [];
+  let claimedItems = [];
+  if (order.siteOrderId) {
+    const r = await site.paid(order.siteOrderId, order.paymentGateway, order.gatewayTransactionId);
+    codes = r.order?.deliveredCodes || [];
+    if (!codes.length) console.warn(`⚠️ [${source}] ${order.orderId}: website order ${order.siteOrderId} has no codes yet (${r.order?.supplierDeliveryPending ? "supplier pending" : r.error || r.order?.status || "unknown"})`);
+  } else {
+    claimedItems = await stockService.assignStockToOrder(order);
+    codes = claimedItems.map((c) => c.credentials);
+  }
 
-  if (claimedItems.length) {
+  if (codes.length) {
     order.status = "delivered";
-    order.deliveredStockId = claimedItems[0]._id;
-    order.deliveredStockIds = claimedItems.map((c) => c._id);
-    order.deliveredCredentials = claimedItems.map((c) => c.credentials).join("\n");
+    if (claimedItems.length) {
+      order.deliveredStockId = claimedItems[0]._id;
+      order.deliveredStockIds = claimedItems.map((c) => c._id);
+    }
+    order.deliveredCredentials = codes.join("\n");
     order.deliveredAt = new Date();
     await order.save();
 
@@ -316,7 +329,7 @@ async function fulfillPaidOrder(order, { amount, expected, raw, source }) {
     );
 
     try {
-      await sendDelivery(order.telegramId, brandName, planLabel, claimedItems.map((c) => c.credentials), order);
+      await sendDelivery(order.telegramId, brandName, planLabel, codes, order);
       console.log(`✅ [${source}] Delivered ${order.orderId} to ${order.telegramId}`);
     } catch (tgErr) {
       console.error(`❌ [Fulfillment] Failed to send Telegram message:`, tgErr.message);
@@ -375,11 +388,65 @@ async function releaseInvoice(order, raw, source) {
         paymentGateway: "",
         lastPaymentGateway: order.paymentGateway,
         gatewayRedirectUrl: null,
+        siteOrderId: null,
+        siteCurrency: "",
         gatewayResponse: raw || null,
       },
     },
   );
-  if (res.modifiedCount) console.log(`↩️ [${source}] Invoice for ${order.orderId} was cancelled/expired — order can be paid again`);
+  if (res.modifiedCount) {
+    // Give the reserved codes back to the website's stock
+    if (order.siteOrderId) await site.cancel(order.siteOrderId).catch(() => {});
+    console.log(`↩️ [${source}] Invoice for ${order.orderId} was cancelled/expired — order can be paid again`);
+  }
+}
+
+/**
+ * Paid orders still waiting for codes (website supplier delivery in progress,
+ * or paid before the website link existed). Delivers as soon as codes exist.
+ */
+async function deliverWaitingOrder(order) {
+  if (order.status !== "stock_pending" || !site.isConfigured() || !site.isSiteProduct(order.wooProductId)) return "SKIPPED";
+  const gateway = ["zinipay", "cryptomus"].includes(order.paymentGateway) ? order.paymentGateway : "zinipay";
+  let r;
+  if (order.siteOrderId) {
+    r = await site.get(order.siteOrderId);
+  } else {
+    // Paid before the website link: place the website order now (at most every 10 min)
+    if (order.siteAttemptAt && Date.now() - order.siteAttemptAt.getTime() < 10 * 60 * 1000) return "WAIT";
+    await Order.updateOne({ _id: order._id }, { $set: { siteAttemptAt: new Date() } });
+    const currency = orderService.GATEWAYS[gateway].currency;
+    const created = await site.create({
+      telegramId: order.telegramId,
+      name: order.telegramFirstName || order.telegramUsername || "",
+      productId: order.wooProductId,
+      variantId: order.wooVariationId,
+      locationId: order.locationId,
+      quantity: order.quantity,
+      currency,
+    });
+    if (!created.ok) {
+      console.warn(`⚠️ [Recover] ${order.orderId}: website order not created: ${created.error}`);
+      return "NO_STOCK";
+    }
+    await Order.updateOne({ _id: order._id }, { $set: { siteOrderId: created.order.id, siteCurrency: currency } });
+    order.siteOrderId = created.order.id;
+    r = await site.paid(order.siteOrderId, gateway, order.gatewayTransactionId || order.orderId);
+  }
+  const codes = r?.order?.deliveredCodes || [];
+  if (!codes.length) return "WAIT";
+
+  const updated = await Order.findOneAndUpdate(
+    { _id: order._id, status: "stock_pending" },
+    { $set: { status: "delivered", deliveredCredentials: codes.join("\n"), deliveredAt: new Date() } },
+    { new: true },
+  );
+  if (!updated) return "ALREADY_PROCESSED";
+  await sendDelivery(updated.telegramId, updated.productName, updated.variationName, codes, updated).catch((e) =>
+    console.error("❌ [Fulfillment] Telegram send error:", e.message),
+  );
+  console.log(`✅ [Website] Delivered ${updated.orderId} (waiting order) to ${updated.telegramId}`);
+  return "DELIVERED";
 }
 
 /**
@@ -552,9 +619,13 @@ router.get("/pay/:orderId", async (req, res) => {
       return res.send(renderCheckoutPage(order));
     }
     // No open invoice (first time, or after a cancel / expiry): make a fresh one
-    const { paymentUrl } = await orderService.startPayment(order.orderId, order.telegramId, gateway);
+    const ip = String(req.headers["x-real-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0] || "").trim();
+    const { paymentUrl } = await orderService.startPayment(order.orderId, order.telegramId, gateway, 0, { ip });
     return res.redirect(302, paymentUrl);
   } catch (err) {
+    if (err instanceof orderService.OrderError) {
+      return page({ status: 409, title: "Not available", statusText: err.code === "out_of_stock" ? "Sold out" : "Could not start the payment", subText: err.message, isSuccess: false });
+    }
     console.error(`[Pay link] ${orderId}:`, err.message);
     return page({ status: 502, title: "Payment unavailable", statusText: "Could not open the payment page", subText: err.message.replace(/^Payment link could not be created: /, "") + " — please try again in a moment.", isSuccess: false });
   }
@@ -741,3 +812,4 @@ module.exports.fulfillPaidOrder = fulfillPaidOrder;
 module.exports.checkZiniPayOrder = checkZiniPayOrder;
 module.exports.checkCryptomusOrder = checkCryptomusOrder;
 module.exports.checkOrderPayment = checkOrderPayment;
+module.exports.deliverWaitingOrder = deliverWaitingOrder;

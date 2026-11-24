@@ -79,7 +79,7 @@ setInterval(syncCatalog, SYNC_EVERY_MS).unref();
 // Payment safety net: webhooks can be missed, so also ask ZiniPay / Cryptomus
 // about recent unpaid orders every minute (delivery happens only once).
 const Order = require('../models/Order');
-const { checkOrderPayment } = require('./routes/webhook');
+const { checkOrderPayment, deliverWaitingOrder } = require('./routes/webhook');
 let paymentCheckRunning = false;
 let paymentTick = 0;
 async function checkPendingPayments() {
@@ -99,6 +99,13 @@ async function checkPendingPayments() {
       .limit(50);
     for (const order of pending) {
       await checkOrderPayment(order).catch((err) => console.error(`[Payment poll] ${order.orderId}:`, err.message));
+    }
+    // Paid but waiting for codes from ipdokan.com (supplier delivery, or paid before the link existed)
+    if (!fresh) {
+      const waiting = await Order.find({ status: 'stock_pending', createdAt: { $gte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) } }).limit(20);
+      for (const order of waiting) {
+        await deliverWaitingOrder(order).catch((err) => console.error(`[Waiting poll] ${order.orderId}:`, err.message));
+      }
     }
   } catch (err) {
     console.error('[Payment poll]', err.message);

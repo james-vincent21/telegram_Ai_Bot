@@ -603,6 +603,9 @@ function registerCustomerHandlers(bot) {
       });
     }
 
+    // Give reserved codes back to ipdokan.com's stock
+    if (order.siteOrderId) await require("../../services/siteOrders").cancel(order.siteOrderId).catch(() => {});
+
     // Conditional update prevents overwriting a payment webhook that arrived meanwhile.
     const updated = await Order.findOneAndUpdate(
       { _id: order._id, status: "pending" },

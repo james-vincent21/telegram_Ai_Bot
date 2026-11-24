@@ -186,7 +186,8 @@ router.post("/orders/:orderId/pay", async (req, res) => {
   const method = String(req.body?.method || "");
   if (!GATEWAYS[method]) return res.status(400).json({ error: "Invalid payment method" });
   try {
-    const { amount, currency } = await startPayment(req.params.orderId, req.tgUser.id, method);
+    const ip = String(req.get("x-real-ip") || "").trim();
+    const { amount, currency } = await startPayment(req.params.orderId, req.tgUser.id, method, 0, { ip });
     return res.json({ paymentUrl: payLink(req.params.orderId, method), amount, currency });
   } catch (err) {
     if (err instanceof OrderError) return res.status(409).json({ error: err.message });

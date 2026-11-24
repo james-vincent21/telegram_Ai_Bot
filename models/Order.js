@@ -94,6 +94,10 @@ const orderSchema = new mongoose.Schema(
     },
     // "zinipay" | "cryptomus" | "sslcommerz"; empty until the customer picks a method
     paymentGateway: { type: String, default: "", index: true },
+    // Order in ipdokan.com's own store (its inventory reserves / sells the codes)
+    siteOrderId: { type: String, default: null, index: true },
+    siteCurrency: { type: String, default: "" },
+    siteAttemptAt: { type: Date, default: null },
     // Gateway of the last invoice that was cancelled / expired (to offer "Pay" again)
     lastPaymentGateway: { type: String, default: "" },
     gatewayRedirectUrl: {
