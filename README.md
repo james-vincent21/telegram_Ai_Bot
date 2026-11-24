@@ -19,7 +19,7 @@ Includes a **React + Tailwind CSS** admin panel for tracking orders, managing pr
 
 - 🛒 **ipdokan.com + SSLCommerz**:
   - Catalog client in [`services/ipdokan.js`](services/ipdokan.js); every 30 min (and on **Sync with ipdokan.com**) products are mirrored into Brands (one per product, with its locations) and Plans (one per package).
-  - Orders are paid with SSLCommerz; its IPN (`POST /webhook/payment-ipn`) is verified server-to-server, the paid amount is checked, and the order is claimed atomically so it is delivered once.
+  - Orders are paid with ZiniPay (bKash / Nagad / Rocket) or SSLCommerz. Every payment is verified with the gateway's API, the paid amount is checked, and the order is claimed atomically so it is delivered once.
   - Credentials are taken from the Stock uploaded for that package (and location) and sent straight to the customer's chat.
 
 - ⚡ **Atomic Proxy Credential Management (MongoDB + Mongoose)**:
@@ -104,7 +104,11 @@ MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>/telegram_proxy_store
 # ipdokan.com catalog
 IPDOKAN_URL=https://ipdokan.com
 
-# SSLCommerz (payment for every order)
+# ZiniPay (payment; Dashboard → Brands → Brand Key)
+ZINIPAY_API_KEY=
+ZINIPAY_REDIRECT_URL=
+
+# SSLCommerz (used when ZiniPay isn't configured)
 GATEWAY_SANDBOX=true
 GATEWAY_STORE_ID=your_store_id
 GATEWAY_STORE_PASSWORD=your_store_password
@@ -161,14 +165,24 @@ Open `http://localhost:3000` and log in with:
 
 ---
 
-## 📡 Payment & Delivery (SSLCommerz)
+## 📡 Payment & Delivery (ZiniPay, or SSLCommerz)
 
-1. Set `GATEWAY_STORE_ID`, `GATEWAY_STORE_PASSWORD` and `GATEWAY_SANDBOX` (true while testing).
-2. Set `APP_BASE_URL` to the public https address of the server. SSLCommerz calls
-   `<APP_BASE_URL>/webhook/payment-ipn` after each payment; customers return to `/payment/success|fail|cancel`.
-3. Upload credentials in **Admin → Stock** for each package (choose a location for location-based packages).
-4. A paid order gets its credentials in the Telegram chat instantly. If the pool is empty the order becomes
-   `stock_pending`, the customer is told, and the admin is alerted to deliver manually.
+**ZiniPay** (used when `ZINIPAY_API_KEY` is set):
+1. Copy the Brand Key from ZiniPay → Brands into `ZINIPAY_API_KEY`.
+2. Set `APP_BASE_URL` to the bot server's public https address. Each invoice tells ZiniPay to call
+   `<APP_BASE_URL>/webhook/zinipay` after payment.
+3. ZiniPay only accepts a `redirect_url` on the brand's website domain. If the bot runs on a different
+   domain, set `ZINIPAY_REDIRECT_URL` / `ZINIPAY_CANCEL_URL` to pages on that site (e.g. `https://ipdokan.com/`).
+4. ZiniPay webhooks aren't signed, so the bot never trusts them: it calls ZiniPay's verify API, and delivers
+   only when the invoice is `COMPLETED` for the full amount. Pending ZiniPay orders from the last 24h are also
+   re-checked every minute, so a missed webhook still gets delivered.
+
+**SSLCommerz** (fallback): set `GATEWAY_STORE_ID`, `GATEWAY_STORE_PASSWORD`, `GATEWAY_SANDBOX`; the IPN is
+`<APP_BASE_URL>/webhook/payment-ipn`.
+
+**Delivery** (both): upload credentials in **Admin → Stock** for each package (choose a location for
+location-based packages). A paid order gets its credentials in the Telegram chat instantly. If the pool is
+empty the order becomes `stock_pending`, the customer is told, and the admin is alerted to deliver manually.
 
 ---
 

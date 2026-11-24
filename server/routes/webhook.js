@@ -6,6 +6,7 @@ const Brand = require("../../models/Brand");
 const Plan = require("../../models/Plan");
 const User = require("../../models/User");
 const paymentService = require("../../services/payment");
+const zinipay = require("../../services/zinipay");
 const stockService = require("../../services/stockService");
 const notifyAdminService = require("../../services/notifyAdmin");
 const strings = require("../../bot/config/strings");
@@ -256,6 +257,127 @@ router.post("/webhook/woocommerce", async (req, res) => {
 });
 
 /**
+ * Marks a verified payment as paid and delivers credentials from Stock.
+ * Shared by every gateway. Safe to call repeatedly for the same order: the
+ * order is claimed atomically, so it is delivered only once.
+ *
+ * @param {Object} order - Order document
+ * @param {{amount?: number, raw?: Object, source: string}} payment - verified gateway data
+ * @returns {Promise<"DELIVERED"|"STOCK_PENDING"|"ALREADY_PROCESSED"|"AMOUNT_MISMATCH">}
+ */
+async function fulfillPaidOrder(order, { amount, raw, source }) {
+  // The gateway must have collected the full order amount
+  if (amount != null && !Number.isNaN(amount) && amount + 0.01 < Number(order.amount)) {
+    console.error(`❌ [${source}] Amount mismatch for ${order.orderId}: paid ${amount}, expected ${order.amount}`);
+    await Order.updateOne(
+      { _id: order._id, status: "pending" },
+      { $set: { status: "failed", gatewayResponse: raw || null } },
+    );
+    return "AMOUNT_MISMATCH";
+  }
+
+  // Claim the order atomically so a repeated notification can't deliver twice
+  const claimed = await Order.findOneAndUpdate(
+    { _id: order._id, status: { $in: ["pending", "failed"] } },
+    { $set: { status: "paid", gatewayResponse: raw || null } },
+    { new: true },
+  );
+  if (!claimed) return "ALREADY_PROCESSED";
+  order = claimed;
+
+  const [brand, plan] = await Promise.all([Brand.findById(order.brandId), Plan.findById(order.planId)]);
+  // The order's own names include the chosen location
+  const brandName = order.productName || brand?.name || "Proxy Provider";
+  const planLabel = order.variationName || plan?.label || "Proxy Plan";
+
+  const claimedItems = await stockService.assignStockToOrder(order);
+
+  if (claimedItems.length) {
+    order.status = "delivered";
+    order.deliveredStockId = claimedItems[0]._id;
+    order.deliveredStockIds = claimedItems.map((c) => c._id);
+    order.deliveredCredentials = claimedItems.map((c) => c.credentials).join("\n");
+    order.deliveredAt = new Date();
+    await order.save();
+
+    await User.findOneAndUpdate(
+      { telegramId: order.telegramId },
+      { $inc: { totalOrders: 1, totalSpent: order.amount }, $set: { lastActiveAt: new Date() } },
+    );
+
+    try {
+      await sendDelivery(order.telegramId, brandName, planLabel, claimedItems.map((c) => c.credentials), order);
+      console.log(`✅ [${source}] Delivered ${order.orderId} to ${order.telegramId}`);
+    } catch (tgErr) {
+      console.error(`❌ [Fulfillment] Failed to send Telegram message:`, tgErr.message);
+    }
+
+    await sendReceipt(bot.telegram, order).catch((e) => console.error("[Receipt]", e.message));
+    await notifyAdminService.notifyOrderDelivered(order, brand, plan).catch((e) => console.error("[NotifyAdmin]", e.message));
+    return "DELIVERED";
+  }
+
+  order.status = "stock_pending";
+  await order.save();
+  try {
+    await bot.telegram.sendMessage(order.telegramId, strings.outOfStockPaid(order.orderId), {
+      parse_mode: "HTML",
+      ...keyboards.afterDeliveryKeyboard(),
+    });
+  } catch (tgErr) {
+    console.error(`❌ [Fulfillment] Telegram send error:`, tgErr.message);
+  }
+  await sendReceipt(bot.telegram, order).catch((e) => console.error("[Receipt]", e.message));
+  await notifyAdminService.notifyOutOfStock(order, brand, plan).catch((e) => console.error("[NotifyAdmin]", e.message));
+  return "STOCK_PENDING";
+}
+
+/**
+ * Asks ZiniPay whether an order's invoice is paid and fulfils it if so.
+ * ZiniPay webhooks are not signed, so the webhook payload is never trusted:
+ * the status always comes from ZiniPay's verify API.
+ * @returns {Promise<string>} fulfilment result, or the invoice status
+ */
+async function checkZiniPayOrder(order) {
+  if (!order?.gatewayTransactionId || order.paymentGateway !== "zinipay") return "NOT_ZINIPAY";
+  const result = await zinipay.verifyInvoice(order.gatewayTransactionId);
+  if (result.status === "COMPLETED") {
+    return fulfillPaidOrder(order, { amount: result.amount, raw: result.raw, source: "ZiniPay" });
+  }
+  if (result.status === "FAILED") {
+    await Order.updateOne(
+      { _id: order._id, status: "pending" },
+      { $set: { status: "failed", gatewayResponse: result.raw } },
+    );
+  }
+  return result.status || "UNKNOWN";
+}
+
+/**
+ * ZiniPay webhook: called after a payment update with invoice_id (query or body).
+ * URL (set per invoice): <APP_BASE_URL>/webhook/zinipay?order_id=<orderId>
+ */
+router.all("/webhook/zinipay", async (req, res) => {
+  const invoiceId = String(req.body?.invoice_id || req.query.invoice_id || "");
+  const orderId = String(req.query.order_id || req.body?.order_id || "");
+  console.log(`🔔 [ZiniPay Webhook] invoice=${invoiceId} order=${orderId}`);
+
+  try {
+    const order = invoiceId
+      ? await Order.findOne({ gatewayTransactionId: invoiceId, paymentGateway: "zinipay" })
+      : orderId
+        ? await Order.findOne({ orderId, paymentGateway: "zinipay" })
+        : null;
+    if (!order) return res.status(404).json({ status: "FAILED", message: "Order not found" });
+    const status = await checkZiniPayOrder(order);
+    return res.status(200).json({ status, orderId: order.orderId });
+  } catch (err) {
+    console.error("❌ [ZiniPay Webhook] Error:", err.message);
+    return res.status(500).json({ status: "ERROR" });
+  }
+});
+
+/**
  * SSLCommerz IPN (Instant Payment Notification) Webhook
  * Handles server-to-server payment confirmation and instant fulfillment.
  */
@@ -265,135 +387,36 @@ router.post("/webhook/payment-ipn", async (req, res) => {
 
   try {
     const verification = await paymentService.verifyPayment(payload);
-
     if (!verification.verified) {
-      console.error(
-        "❌ [IPN Webhook] Payment verification failed:",
-        verification.error,
-      );
-      return res
-        .status(400)
-        .json({ status: "FAILED", message: verification.error });
+      console.error("❌ [IPN Webhook] Payment verification failed:", verification.error);
+      return res.status(400).json({ status: "FAILED", message: verification.error });
     }
 
     const tranId = verification.tranId || payload.tran_id;
     if (!tranId) {
-      return res
-        .status(400)
-        .json({ status: "FAILED", message: "Missing transaction ID" });
+      return res.status(400).json({ status: "FAILED", message: "Missing transaction ID" });
     }
 
     const order = await Order.findOne({ gatewayTransactionId: tranId });
     if (!order) {
-      console.error(
-        `❌ [IPN Webhook] Order with transaction ID ${tranId} not found.`,
-      );
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Order not found" });
+      console.error(`❌ [IPN Webhook] Order with transaction ID ${tranId} not found.`);
+      return res.status(404).json({ status: "FAILED", message: "Order not found" });
     }
 
     if (order.status === "delivered" || order.status === "paid") {
-      console.log(
-        `ℹ️ [IPN Webhook] Order ${order.orderId} already ${order.status}.`,
-      );
+      console.log(`ℹ️ [IPN Webhook] Order ${order.orderId} already ${order.status}.`);
       return res.status(200).json({ status: "ALREADY_PROCESSED" });
     }
 
-    // The gateway must have collected the full order amount
-    if (
-      verification.amount != null &&
-      !Number.isNaN(verification.amount) &&
-      verification.amount + 0.01 < Number(order.amount)
-    ) {
-      console.error(
-        `❌ [IPN Webhook] Amount mismatch for ${order.orderId}: paid ${verification.amount}, expected ${order.amount}`,
-      );
-      order.status = "failed";
-      order.gatewayResponse = verification.raw || payload;
-      await order.save();
+    const status = await fulfillPaidOrder(order, {
+      amount: verification.amount,
+      raw: verification.raw || payload,
+      source: "SSLCommerz",
+    });
+    if (status === "AMOUNT_MISMATCH") {
       return res.status(400).json({ status: "FAILED", message: "Amount mismatch" });
     }
-
-    // Claim the order atomically so a repeated IPN can't deliver twice
-    const claimedOrder = await Order.findOneAndUpdate(
-      { _id: order._id, status: { $in: ["pending", "failed"] } },
-      { $set: { status: "paid", gatewayResponse: verification.raw || payload } },
-      { new: true },
-    );
-    if (!claimedOrder) return res.status(200).json({ status: "ALREADY_PROCESSED" });
-    order.status = claimedOrder.status;
-    order.gatewayResponse = claimedOrder.gatewayResponse;
-
-    const [brand, plan] = await Promise.all([
-      Brand.findById(order.brandId),
-      Plan.findById(order.planId),
-    ]);
-
-    // The order's own names include the chosen location
-    const brandName = order.productName || brand?.name || "Proxy Provider";
-    const planLabel = order.variationName || plan?.label || "Proxy Plan";
-
-    const claimedItems = await stockService.assignStockToOrder(order);
-
-    if (claimedItems.length) {
-      order.status = "delivered";
-      order.deliveredStockId = claimedItems[0]._id;
-      order.deliveredStockIds = claimedItems.map((c) => c._id);
-      order.deliveredCredentials = claimedItems
-        .map((c) => c.credentials)
-        .join("\n");
-      order.deliveredAt = new Date();
-      await order.save();
-
-      await User.findOneAndUpdate(
-        { telegramId: order.telegramId },
-        {
-          $inc: { totalOrders: 1, totalSpent: order.amount },
-          $set: { lastActiveAt: new Date() },
-        },
-      );
-
-      try {
-        await sendDelivery(
-          order.telegramId,
-          brandName,
-          planLabel,
-          claimedItems.map((c) => c.credentials),
-          order,
-        );
-      } catch (tgErr) {
-        console.error(
-          `❌ [Fulfillment] Failed to send Telegram message:`,
-          tgErr.message,
-        );
-      }
-
-      await sendReceipt(bot.telegram, order).catch((e) => console.error("[Receipt]", e.message));
-      await notifyAdminService.notifyOrderDelivered(order, brand, plan);
-      return res
-        .status(200)
-        .json({ status: "DELIVERED", orderId: order.orderId });
-    } else {
-      order.status = "stock_pending";
-      await order.save();
-
-      try {
-        const outOfStockMsg = strings.outOfStockPaid(order.orderId);
-        await bot.telegram.sendMessage(order.telegramId, outOfStockMsg, {
-          parse_mode: "HTML",
-          ...keyboards.afterDeliveryKeyboard(),
-        });
-      } catch (tgErr) {
-        console.error(`❌ [Fulfillment] Telegram send error:`, tgErr.message);
-      }
-
-      await sendReceipt(bot.telegram, order).catch((e) => console.error("[Receipt]", e.message));
-      await notifyAdminService.notifyOutOfStock(order, brand, plan);
-      return res
-        .status(200)
-        .json({ status: "STOCK_PENDING", orderId: order.orderId });
-    }
+    return res.status(200).json({ status, orderId: order.orderId });
   } catch (err) {
     console.error("❌ [IPN Webhook] Unexpected error:", err);
     return res.status(500).json({ status: "ERROR", message: err.message });
@@ -437,8 +460,13 @@ function renderReturnPage({ title, statusText, subText, isSuccess, orderId }) {
 }
 
 // Payment Redirection Routes
-router.all("/payment/success", (req, res) => {
+router.all("/payment/success", async (req, res) => {
   const orderId = req.query.order_id || req.body?.value_a || "";
+  // ZiniPay: confirm with the gateway now instead of waiting for the webhook
+  if (orderId) {
+    const order = await Order.findOne({ orderId: String(orderId), paymentGateway: "zinipay", status: "pending" }).catch(() => null);
+    if (order) await checkZiniPayOrder(order).catch((e) => console.error("[ZiniPay success check]", e.message));
+  }
   res.send(
     renderReturnPage({
       title: "Payment Successful",
@@ -480,3 +508,5 @@ router.all("/payment/cancel", (req, res) => {
 });
 
 module.exports = router;
+module.exports.fulfillPaidOrder = fulfillPaidOrder;
+module.exports.checkZiniPayOrder = checkZiniPayOrder;

@@ -83,6 +83,8 @@ const orderSchema = new mongoose.Schema(
       required: false,
       sparse: true,
     },
+    // "zinipay" | "sslcommerz" (empty for old WooCommerce orders)
+    paymentGateway: { type: String, default: "", index: true },
     gatewayRedirectUrl: {
       type: String,
       default: null,

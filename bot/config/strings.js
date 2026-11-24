@@ -162,8 +162,8 @@ module.exports = {
     `${quantity > 1 ? `\n🔢 <b>Quantity:</b> ${quantity}` : ""}\n` +
     `🆔 <b>Order ID:</b> <code>${orderId}</code></blockquote>\n\n` +
     `💰 <b>Total to pay:</b> <b>${price} ${currency}</b>\n${THIN}\n` +
-    `💳 Tap <b>Pay Securely</b> below to open the secure SSLCommerz checkout.\n` +
-    `<i>bKash · Nagad · Rocket · Card · Net banking</i>\n\n` +
+    `💳 Tap <b>Pay Securely</b> below to open the secure checkout page.\n` +
+    `<i>bKash · Nagad · Rocket</i>\n\n` +
     `⚡ Your proxy will appear in this chat as soon as payment is confirmed.`,
   payButtonText: (amount, currency) => `💳 Pay Securely · ${amount} ${currency}`,
   cancelButtonText: "✖️ Cancel Order",

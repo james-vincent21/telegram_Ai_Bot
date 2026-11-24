@@ -1,14 +1,22 @@
 /**
  * Shared order logic for the Telegram bot and the Mini App shop.
  *
- * Products come from ipdokan.com. Payment is taken with SSLCommerz; when its
- * IPN confirms payment (server/routes/webhook.js), credentials are claimed
- * from Stock and sent to the customer's Telegram chat.
+ * Products come from ipdokan.com. Payment is taken with ZiniPay (or
+ * SSLCommerz); once the gateway confirms payment (server/routes/webhook.js),
+ * credentials are claimed from Stock and sent to the customer's Telegram chat.
  */
 const crypto = require("crypto");
 const Order = require("../models/Order");
 const catalog = require("./ipdokan");
 const paymentService = require("./payment");
+const zinipay = require("./zinipay");
+
+/** ZiniPay when its key is set (or PAYMENT_GATEWAY=zinipay), else SSLCommerz. */
+function activeGateway() {
+  const forced = (process.env.PAYMENT_GATEWAY || "").trim().toLowerCase();
+  if (forced === "zinipay" || forced === "sslcommerz") return forced;
+  return zinipay.isConfigured() ? "zinipay" : "sslcommerz";
+}
 
 const MAX_QUANTITY = 50;
 
@@ -80,7 +88,7 @@ async function resolveLocation(item, locationId) {
 }
 
 /**
- * Creates the local Order and its SSLCommerz payment link for a Telegram user.
+ * Creates the local Order and its payment link for a Telegram user.
  * @param {{id:number, username?:string, first_name?:string}} from - Telegram user
  * @returns {Promise<{order, item, location, total:number, paymentUrl:string}>}
  */
@@ -96,6 +104,7 @@ async function createTelegramOrder({ from, productId, variationId, quantity, loc
   const orderId = newOrderId();
   const total = Math.round(item.price * qty * 100) / 100;
   const { brand, plan } = await catalog.ensureBrandPlan(product.id, variation?.id);
+  const gateway = activeGateway();
 
   const order = await Order.create({
     orderId,
@@ -115,15 +124,19 @@ async function createTelegramOrder({ from, productId, variationId, quantity, loc
     unitPrice: item.price,
     amount: total,
     currency: "BDT",
+    paymentGateway: gateway,
+    // SSLCommerz: our tran_id. ZiniPay: replaced by its invoice id below.
     gatewayTransactionId: `${orderId}-${crypto.randomBytes(4).toString("hex")}`,
     status: "pending",
   });
 
+  const customer = { name: from.first_name || from.username || `User ${from.id}` };
   let session;
   try {
-    session = await paymentService.createPaymentSession(order, {
-      name: from.first_name || from.username || `User ${from.id}`,
-    });
+    session =
+      gateway === "zinipay"
+        ? await zinipay.createInvoice(order, customer)
+        : await paymentService.createPaymentSession(order, customer);
   } catch (err) {
     session = { success: false, error: err.message };
   }
@@ -136,6 +149,7 @@ async function createTelegramOrder({ from, productId, variationId, quantity, loc
   }
 
   order.gatewayRedirectUrl = session.redirectUrl;
+  if (gateway === "zinipay" && session.invoiceId) order.gatewayTransactionId = session.invoiceId;
   await order.save();
 
   return { order, item, location, total, paymentUrl: session.redirectUrl };
@@ -147,5 +161,6 @@ module.exports = {
   maxQuantity,
   packageLabel,
   createTelegramOrder,
+  activeGateway,
   OrderError,
 };
