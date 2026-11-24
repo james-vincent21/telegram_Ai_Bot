@@ -12,6 +12,7 @@ const {
   withServiceFee,
   createTelegramOrder,
   startPayment,
+  payLink,
   availableGateways,
   GATEWAYS,
   OrderError,
@@ -381,7 +382,9 @@ function registerCustomerHandlers(bot) {
 
   /** Checkout screen once a payment method is chosen (or the only one) */
   async function showPaymentLink(ctx, order, gateway) {
-    const { paymentUrl, amount, currency } = await startPayment(order.orderId, ctx.from.id, gateway);
+    const { amount, currency } = await startPayment(order.orderId, ctx.from.id, gateway);
+    // The button opens the bot's /pay link, which re-creates the invoice if the customer cancels and comes back
+    const paymentUrl = payLink(order.orderId, gateway);
     return animator.edit(
       ctx,
       strings.orderSummary(

@@ -12,6 +12,7 @@ const catalog = require("../../services/ipdokan");
 const {
   createTelegramOrder,
   startPayment,
+  payLink,
   availableGateways,
   GATEWAYS,
   OrderError,
@@ -180,8 +181,8 @@ router.post("/orders/:orderId/pay", async (req, res) => {
   const method = String(req.body?.method || "");
   if (!GATEWAYS[method]) return res.status(400).json({ error: "Invalid payment method" });
   try {
-    const { paymentUrl, amount, currency } = await startPayment(req.params.orderId, req.tgUser.id, method);
-    return res.json({ paymentUrl, amount, currency });
+    const { amount, currency } = await startPayment(req.params.orderId, req.tgUser.id, method);
+    return res.json({ paymentUrl: payLink(req.params.orderId, method), amount, currency });
   } catch (err) {
     if (err instanceof OrderError) return res.status(409).json({ error: err.message });
     console.error("[Shop] pay:", err.message);
@@ -195,8 +196,17 @@ router.get("/orders", async (req, res) => {
     const orders = await Order.find({ telegramId: req.tgUser.id })
       .sort({ createdAt: -1 })
       .limit(20)
-      .select("orderId paymentGateway amountUsd productName variationName locationName quantity amount currency status createdAt expiresAt deliveredCredentials gatewayRedirectUrl");
-    return res.json({ orders });
+      .select("orderId paymentGateway lastPaymentGateway amountUsd productName variationName locationName quantity amount currency status createdAt expiresAt deliveredCredentials gatewayRedirectUrl");
+    return res.json({
+      orders: orders.map((o) => ({
+        ...o.toObject(),
+        gatewayRedirectUrl: undefined,
+        payLink:
+          o.status === "pending" && (o.paymentGateway || o.lastPaymentGateway)
+            ? payLink(o.orderId, o.paymentGateway || o.lastPaymentGateway)
+            : null,
+      })),
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

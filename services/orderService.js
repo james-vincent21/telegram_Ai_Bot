@@ -30,6 +30,22 @@ function availableGateways() {
   return Object.keys(GATEWAYS).filter((g) => GATEWAYS[g].configured());
 }
 
+/** Signature for the bot's own /pay/<orderId> link (so strangers can't open other people's orders). */
+function payToken(orderId) {
+  const secret = process.env.JWT_SECRET || process.env.BOT_TOKEN || "ipdokan-bot";
+  return crypto.createHmac("sha256", secret).update(`pay:${orderId}`).digest("hex").slice(0, 20);
+}
+
+/**
+ * The link behind every "Pay" button: <APP_BASE_URL>/pay/<orderId>?m=<gateway>&t=<token>.
+ * Each visit re-checks the invoice and, if the customer cancelled or it
+ * expired, makes a fresh one, so the same button always works.
+ */
+function payLink(orderId, gateway) {
+  const base = (process.env.APP_BASE_URL || "http://localhost:5001").replace(/\/$/, "");
+  return `${base}/pay/${encodeURIComponent(orderId)}?m=${encodeURIComponent(gateway)}&t=${payToken(orderId)}`;
+}
+
 /** Amount + currency an order is charged in with a given gateway. */
 function chargeFor(order, gateway) {
   return GATEWAYS[gateway]?.currency === "USD"
@@ -247,5 +263,7 @@ module.exports = {
   chargeFor,
   createTelegramOrder,
   startPayment,
+  payLink,
+  payToken,
   OrderError,
 };

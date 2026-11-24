@@ -431,14 +431,14 @@
           <div class="sub">${esc(o.orderId)} · ${new Date(o.createdAt).toLocaleDateString()}${o.expiresAt ? ` · expires ${new Date(o.expiresAt).toLocaleDateString()}` : ""}</div></div>
           <span class="st ${esc(o.status)}">${ST[o.status] || esc(o.status)}</span></div>
         ${o.deliveredCredentials ? `<div class="creds">${esc(o.deliveredCredentials)}</div><div class="row"><button class="btn" data-copy="${i}">📋 Copy credentials</button></div>` : ""}
-        ${o.status === "pending" && o.gatewayRedirectUrl ? `<div class="row"><button class="btn pay" data-pay="${i}">💳 Pay now</button></div>` : ""}
-        ${o.status === "pending" && !o.gatewayRedirectUrl ? `<div class="sub">Choose a payment method in the bot chat to pay.</div>` : ""}
+        ${o.status === "pending" && o.payLink ? `<div class="row"><button class="btn pay" data-pay="${i}">💳 Pay now</button></div>` : ""}
+        ${o.status === "pending" && !o.payLink ? `<div class="sub">Choose a payment method in the bot chat to pay.</div>` : ""}
       </div>`).join("");
     view.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = async () => {
       const text = state.orders[+b.dataset.copy].deliveredCredentials;
       try { await navigator.clipboard.writeText(text); haptic.ok(); toast("✅ Copied", true); } catch { haptic.warn(); toast("Long-press the box to copy."); }
     }));
-    view.querySelectorAll("[data-pay]").forEach((b) => (b.onclick = () => { haptic.soft(); const u = state.orders[+b.dataset.pay].gatewayRedirectUrl; tg ? tg.openLink(u) : (location.href = u); }));
+    view.querySelectorAll("[data-pay]").forEach((b) => (b.onclick = () => { haptic.soft(); const u = state.orders[+b.dataset.pay].payLink; tg ? tg.openLink(u) : (location.href = u); }));
   }
 
   if (!initData) {

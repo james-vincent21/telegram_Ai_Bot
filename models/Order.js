@@ -94,6 +94,8 @@ const orderSchema = new mongoose.Schema(
     },
     // "zinipay" | "cryptomus" | "sslcommerz"; empty until the customer picks a method
     paymentGateway: { type: String, default: "", index: true },
+    // Gateway of the last invoice that was cancelled / expired (to offer "Pay" again)
+    lastPaymentGateway: { type: String, default: "" },
     gatewayRedirectUrl: {
       type: String,
       default: null,

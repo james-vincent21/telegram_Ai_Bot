@@ -7,6 +7,7 @@ const Plan = require("../../models/Plan");
 const User = require("../../models/User");
 const paymentService = require("../../services/payment");
 const zinipay = require("../../services/zinipay");
+const orderService = require("../../services/orderService");
 const cryptomus = require("../../services/cryptomus");
 const stockService = require("../../services/stockService");
 const notifyAdminService = require("../../services/notifyAdmin");
@@ -354,12 +355,31 @@ async function checkZiniPayOrder(order) {
     return fulfillPaidOrder(order, { amount: result.amount, raw: result.raw, source: "ZiniPay" });
   }
   if (result.status === "FAILED") {
-    await Order.updateOne(
-      { _id: order._id, status: "pending" },
-      { $set: { status: "failed", gatewayResponse: result.raw } },
-    );
+    // Cancelled / failed invoice: keep the order, let the customer pay again
+    await releaseInvoice(order, result.raw, "ZiniPay");
   }
   return result.status || "UNKNOWN";
+}
+
+/**
+ * The customer cancelled (or the invoice expired / failed) without paying.
+ * The order stays pending; only this invoice is dropped, so the next "Pay"
+ * tap creates a fresh one. Matches on the invoice id so a newer invoice is
+ * never touched.
+ */
+async function releaseInvoice(order, raw, source) {
+  const res = await Order.updateOne(
+    { _id: order._id, status: "pending", gatewayTransactionId: order.gatewayTransactionId },
+    {
+      $set: {
+        paymentGateway: "",
+        lastPaymentGateway: order.paymentGateway,
+        gatewayRedirectUrl: null,
+        gatewayResponse: raw || null,
+      },
+    },
+  );
+  if (res.modifiedCount) console.log(`↩️ [${source}] Invoice for ${order.orderId} was cancelled/expired — order can be paid again`);
 }
 
 /**
@@ -401,6 +421,9 @@ async function checkCryptomusOrder(order) {
     return fulfillPaidOrder(order, { amount: inv.amount, expected: order.amountUsd, raw: inv.raw, source: "Cryptomus" });
   }
   if (inv.failed) {
+    await releaseInvoice(order, inv.raw, "Cryptomus");
+  } else if (inv.needsReview) {
+    console.error(`⚠️ [Cryptomus] ${order.orderId}: invoice is "${inv.status}" (wrong amount paid) — review in Cryptomus and deliver or refund manually.`);
     await Order.updateOne(
       { _id: order._id, status: "pending" },
       { $set: { status: "failed", gatewayResponse: inv.raw } },
@@ -483,6 +506,50 @@ router.post("/webhook/payment-ipn", async (req, res) => {
   } catch (err) {
     console.error("❌ [IPN Webhook] Unexpected error:", err);
     return res.status(500).json({ status: "ERROR", message: err.message });
+  }
+});
+
+/**
+ * GET /pay/<orderId>?m=<gateway>&t=<token> — the link behind every Pay button.
+ * Paid → "payment received" page. Invoice still open → that invoice.
+ * Cancelled / expired → a fresh invoice. Order cancelled → explains why.
+ */
+router.get("/pay/:orderId", async (req, res) => {
+  const { orderId } = req.params;
+  const gateway = String(req.query.m || "");
+  const page = (opts) => res.status(opts.status || 200).send(renderReturnPage({ orderId, ...opts }));
+  const a = Buffer.from(String(req.query.t || ""));
+  const b = Buffer.from(orderService.payToken(orderId));
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return page({ status: 403, title: "Invalid link", statusText: "This payment link is not valid", subText: "Please open the order again from the Telegram bot.", isSuccess: false });
+  }
+
+  try {
+    let order = await Order.findOne({ orderId });
+    if (!order) {
+      return page({ status: 404, title: "Order not found", statusText: "Order not found", subText: "Please place the order again from the Telegram bot.", isSuccess: false });
+    }
+    // Ask the gateway first: this also fulfils a paid order, or releases a dead invoice
+    if (order.status === "pending" && order.paymentGateway) {
+      await checkOrderPayment(order).catch((e) => console.error("[Pay link check]", e.message));
+      order = await Order.findById(order._id);
+    }
+
+    if (["paid", "delivered", "stock_pending", "processing", "completed"].includes(order.status)) {
+      return page({ title: "Payment received", statusText: "Payment Received!", subText: "This order is already paid. Your proxy is delivered in your Telegram chat.", isSuccess: true });
+    }
+    if (order.status !== "pending") {
+      return page({ title: "Order closed", statusText: "This order is closed", subText: "It was cancelled or could not be completed. Please place a new order from the Telegram bot.", isSuccess: false });
+    }
+    if (order.paymentGateway && order.gatewayRedirectUrl && (!gateway || order.paymentGateway === gateway)) {
+      return res.redirect(302, order.gatewayRedirectUrl);
+    }
+    // No open invoice (first visit after a cancel / expiry): make a fresh one
+    const { paymentUrl } = await orderService.startPayment(order.orderId, order.telegramId, gateway || order.paymentGateway || "zinipay");
+    return res.redirect(302, paymentUrl);
+  } catch (err) {
+    console.error(`[Pay link] ${orderId}:`, err.message);
+    return page({ status: 502, title: "Payment unavailable", statusText: "Could not open the payment page", subText: err.message.replace(/^Payment link could not be created: /, "") + " — please try again in a moment.", isSuccess: false });
   }
 });
 

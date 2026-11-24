@@ -15,7 +15,10 @@ const axios = require("axios");
 const BASE_URL = (process.env.CRYPTOMUS_BASE_URL || "https://api.cryptomus.com").replace(/\/$/, "");
 const INVOICE_LIFETIME_SECONDS = 60 * 60;
 const PAID_STATUSES = new Set(["paid", "paid_over"]);
-const FAILED_STATUSES = new Set(["cancel", "fail", "system_fail", "wrong_amount", "refund_paid"]);
+// Invoice is dead (cancelled / expired / failed): the order can get a new one
+const FAILED_STATUSES = new Set(["cancel", "fail", "system_fail", "refund_paid"]);
+// Money arrived but not the right amount: needs a human
+const NEEDS_REVIEW_STATUSES = new Set(["wrong_amount", "wrong_amount_waiting"]);
 
 function merchantId() {
   return (process.env.CRYPTOMUS_MERCHANT_ID || "").trim();
@@ -59,9 +62,14 @@ async function call(path, body) {
   return data.result;
 }
 
-/** Cryptomus order_id for one of our orders (letters, digits, - and _ only). */
+/**
+ * Cryptomus order_id for one payment attempt of our order (letters, digits,
+ * - and _ only). Unique per attempt: Cryptomus won't reuse an order_id after
+ * its invoice was cancelled or expired.
+ */
 function cryptomusOrderId(order) {
-  return `tg_${String(order.orderId).replace(/[^A-Za-z0-9_-]/g, "")}`;
+  const attempt = crypto.randomBytes(3).toString("hex");
+  return `tg_${String(order.orderId).replace(/[^A-Za-z0-9_-]/g, "")}_${attempt}`;
 }
 
 /**
@@ -73,10 +81,11 @@ async function createInvoice(order) {
   const returnBase = (process.env.CRYPTOMUS_RETURN_URL || process.env.ZINIPAY_REDIRECT_URL || `${appBaseUrl}/payment/success`).trim();
   const withOrder = (u) => `${u}${u.includes("?") ? "&" : "?"}order_id=${encodeURIComponent(order.orderId)}`;
 
+  const cmOrderId = cryptomusOrderId(order);
   const invoice = await call("/v1/payment", {
     amount: Number(order.amountUsd).toFixed(2),
     currency: "USD",
-    order_id: cryptomusOrderId(order),
+    order_id: cmOrderId,
     url_return: withOrder(returnBase),
     url_success: withOrder(returnBase),
     // Cryptomus refuses some callback hosts ("Request contains forbidden input"),
@@ -88,7 +97,7 @@ async function createInvoice(order) {
   if (typeof invoice.url !== "string") {
     return { success: false, error: "Cryptomus did not return a payment URL.", raw: invoice };
   }
-  return { success: true, redirectUrl: invoice.url, invoiceId: cryptomusOrderId(order), raw: invoice };
+  return { success: true, redirectUrl: invoice.url, invoiceId: cmOrderId, raw: invoice };
 }
 
 /**
@@ -102,6 +111,7 @@ async function getInvoice(cryptomusId) {
     status,
     paid: PAID_STATUSES.has(status),
     failed: FAILED_STATUSES.has(status),
+    needsReview: NEEDS_REVIEW_STATUSES.has(status),
     amount: Number(invoice.amount),
     currency: String(invoice.currency || "").toUpperCase(),
     orderId: String(invoice.order_id || ""),
