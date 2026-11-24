@@ -2,11 +2,8 @@ require("dotenv").config();
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 
-const Brand = require("../models/Brand");
-const Plan = require("../models/Plan");
-const Stock = require("../models/Stock");
 const Admin = require("../models/Admin");
-const woocommerce = require("../services/woocommerce");
+const catalog = require("../services/ipdokan");
 
 async function seed() {
   const mongoUri =
@@ -28,79 +25,14 @@ async function seed() {
   );
   console.log(`👤 Admin user verified/created: "${adminUsername}"`);
 
-  // 2. Sync products directly from ipdokan.com
-  console.log("🔄 Fetching products from ipdokan.com...");
+  // 2. Mirror ipdokan.com products into Brands / Plans.
+  //    (No sample stock: real credentials are uploaded in the admin panel.)
+  console.log("🔄 Syncing products from ipdokan.com...");
   try {
-    const [gbProducts, ipProducts] = await Promise.all([
-      woocommerce.getProductsByType("gb", true),
-      woocommerce.getProductsByType("ip", true),
-    ]);
-
-    console.log(
-      `📦 Found ${gbProducts.length} GB products and ${ipProducts.length} IP products.`,
-    );
-
-    const allProds = [
-      ...gbProducts.map((p) => ({ ...p, proxyType: "gb" })),
-      ...ipProducts.map((p) => ({ ...p, proxyType: "ip" })),
-    ];
-
-    for (const p of allProds) {
-      const emoji = p.proxyType === "gb" ? "🌐" : "🔢";
-      const brand = await Brand.findOneAndUpdate(
-        { name: p.name },
-        {
-          $set: {
-            name: p.name,
-            emoji,
-            description: `WooCommerce ID: ${p.id}`,
-            isActive: true,
-          },
-        },
-        { upsert: true, new: true },
-      );
-      console.log(`➕ Synced Brand: ${brand.emoji} ${brand.name}`);
-
-      if (p.hasVariations) {
-        const variations = await woocommerce.getProductVariations(p.id, true);
-        for (const v of variations) {
-          const plan = await Plan.findOneAndUpdate(
-            { brandId: brand._id, label: v.name },
-            {
-              $set: {
-                brandId: brand._id,
-                label: v.name,
-                price: parseFloat(v.price) || 0,
-                currency: "BDT",
-                isActive: v.inStock,
-              },
-            },
-            { upsert: true, new: true },
-          );
-
-          // Add a sample test stock if no stock exists for this variation
-          const count = await Stock.countDocuments({ wooVariationId: v.id });
-          if (count === 0) {
-            await Stock.create({
-              wooProductId: p.id,
-              wooVariationId: v.id,
-              productName: p.name,
-              variationName: v.name,
-              brandId: brand._id,
-              planId: plan._id,
-              credentials: `proxy.ipdokan.com:8080:user_${v.id}:pass_${Math.floor(1000 + Math.random() * 9000)}`,
-              isUsed: false,
-              batchNote: "Initial seed stock",
-            });
-          }
-        }
-        console.log(
-          `   └─ Synced ${variations.length} packages for ${brand.name}`,
-        );
-      }
-    }
+    const { brands, plans } = await catalog.syncToStore();
+    console.log(`📦 Synced ${brands} products and ${plans} packages.`);
   } catch (err) {
-    console.error("⚠️ WooCommerce sync warning:", err.message);
+    console.error("⚠️ ipdokan.com sync warning:", err.message);
   }
 
   console.log("\n✅ Database seeding complete!");

@@ -1,5 +1,6 @@
 const { Markup } = require("telegraf");
 const strings = require("./config/strings");
+const { shortId } = require("../services/ipdokan");
 
 /**
  * Button colors (Bot API 9.4+, `style` field). Telegram apps released before
@@ -112,32 +113,58 @@ function variationsKeyboard(variations, productId, categoryId) {
   const rows = variations.map((v) => {
     const qty = v.stockQuantity;
     const soldOut = !v.inStock || qty === 0;
+    const vid = shortId(v.id);
     if (soldOut) {
-      return [cb(`🔴 ${v.name}  ·  Sold out`, `outofstock_${v.id}`, RED)];
+      return [cb(`🔴 ${v.name}  ·  Sold out`, `outofstock_${vid}`, RED)];
     }
-    const data = `var_${productId}_${v.id}_${categoryId}`;
+    const data = `var_${productId}_${vid}_${categoryId}`;
+    const pin = v.chooseLocation ? " 📍" : "";
     if (qty != null && qty < LOW_STOCK) {
-      return [cb(`🟡 ${v.name}  ·  ${v.price} ৳ · only ${qty} left`, data)];
+      return [cb(`🟡 ${v.name}${pin}  ·  ${v.price} ৳ · only ${qty} left`, data)];
     }
     const badge = qty != null ? ` · ${qty} left` : "";
-    return [cb(`🟢 ${v.name}  ·  ${v.price} ৳${badge}`, data, GREEN)];
+    return [cb(`🟢 ${v.name}${pin}  ·  ${v.price} ৳${badge}`, data, GREEN)];
   });
   rows.push(navRow(`cat_${categoryId}`));
   return Markup.inlineKeyboard(rows);
 }
 
 /**
+ * Location picker for packages that need one (static residential, ISP…).
+ * Callback data: loc_<productId>_<variationShortId>_<locationId>_<categoryId>
+ */
+function locationsKeyboard(locations, productId, variationId, categoryId = 0) {
+  const vid = shortId(variationId);
+  const cid = categoryId || 0;
+  const rows = locations.map((l) => {
+    if (!l.inStock) return [cb(`🔴 ${l.name} · Sold out`, "outofstock_0", RED)];
+    const badge = l.stock != null ? ` · ${l.stock}` : "";
+    return [cb(`📍 ${l.name}${badge}`, `loc_${productId}_${vid}_${l.id}_${cid}`, BLUE)];
+  });
+  rows.push(navRow(cid ? `prod_${productId}_${cid}` : "back_to_cats"));
+  return Markup.inlineKeyboard(rows);
+}
+
+/**
  * Quantity selector.
- * Callback data: qty_<productId>_<variationId>_<qty>_<categoryId> (variationId 0 = simple product)
- *                buy_<productId>_<variationId>_<qty>_<categoryId>
+ * Callback data: qty_<productId>_<variationId>_<qty>_<categoryId>_<locationId>
+ *                buy_<productId>_<variationId>_<qty>_<categoryId>_<locationId>
+ * variationId 0 = simple product, locationId 0 = no location.
  * categoryId 0 = unknown (old buttons), Back then goes to the category list.
  */
-function quantityKeyboard(productId, variationId, quantity, max, totalLabel, categoryId = 0) {
-  const vid = variationId || 0;
+function quantityKeyboard(productId, variationId, quantity, max, totalLabel, categoryId = 0, locationId = 0) {
+  const vid = variationId ? shortId(variationId) : 0;
   const cid = categoryId || 0;
-  const set = (q) => `qty_${productId}_${vid}_${Math.min(max, Math.max(1, q))}_${cid}`;
-  // Back: packages list (variable product) → products list (simple product) → categories
-  const back = !cid ? "back_to_cats" : vid ? `prod_${productId}_${cid}` : `cat_${cid}`;
+  const lid = locationId || 0;
+  const set = (q) => `qty_${productId}_${vid}_${Math.min(max, Math.max(1, q))}_${cid}_${lid}`;
+  // Back: locations → packages list (variable product) → products list (simple product) → categories
+  const back = !cid
+    ? "back_to_cats"
+    : lid
+      ? `var_${productId}_${vid}_${cid}`
+      : vid
+        ? `prod_${productId}_${cid}`
+        : `cat_${cid}`;
 
   const presets = [1, 5, 10, 25, 50].filter((q) => q <= max);
   return Markup.inlineKeyboard([
@@ -147,7 +174,7 @@ function quantityKeyboard(productId, variationId, quantity, max, totalLabel, cat
       cb("➕", set(quantity + 1), quantity < max ? GREEN : undefined),
     ],
     presets.map((q) => cb(q === quantity ? `✅ ${q}` : `×${q}`, set(q), q === quantity ? BLUE : undefined)),
-    [cb(`🛒 Confirm Order · ${totalLabel}`, `buy_${productId}_${vid}_${quantity}_${cid}`, GREEN)],
+    [cb(`🛒 Confirm Order · ${totalLabel}`, `buy_${productId}_${vid}_${quantity}_${cid}_${lid}`, GREEN)],
     navRow(back),
   ]);
 }
@@ -291,6 +318,7 @@ module.exports = {
   categoriesKeyboard,
   productsKeyboard,
   variationsKeyboard,
+  locationsKeyboard,
   quantityKeyboard,
   orderPaymentKeyboard,
   userOrdersKeyboard,

@@ -17,6 +17,10 @@ const brandSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    // Linked ipdokan.com product (set by the catalog sync)
+    ipdokanProductId: { type: String, default: null, index: true },
+    // Locations the customer can choose for this product (from ipdokan.com)
+    locations: { type: [{ _id: false, id: String, name: String }], default: [] },
     isActive: {
       type: Boolean,
       default: true,

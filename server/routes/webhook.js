@@ -300,17 +300,39 @@ router.post("/webhook/payment-ipn", async (req, res) => {
       return res.status(200).json({ status: "ALREADY_PROCESSED" });
     }
 
-    order.status = "paid";
-    order.gatewayResponse = verification.raw || payload;
-    await order.save();
+    // The gateway must have collected the full order amount
+    if (
+      verification.amount != null &&
+      !Number.isNaN(verification.amount) &&
+      verification.amount + 0.01 < Number(order.amount)
+    ) {
+      console.error(
+        `❌ [IPN Webhook] Amount mismatch for ${order.orderId}: paid ${verification.amount}, expected ${order.amount}`,
+      );
+      order.status = "failed";
+      order.gatewayResponse = verification.raw || payload;
+      await order.save();
+      return res.status(400).json({ status: "FAILED", message: "Amount mismatch" });
+    }
+
+    // Claim the order atomically so a repeated IPN can't deliver twice
+    const claimedOrder = await Order.findOneAndUpdate(
+      { _id: order._id, status: { $in: ["pending", "failed"] } },
+      { $set: { status: "paid", gatewayResponse: verification.raw || payload } },
+      { new: true },
+    );
+    if (!claimedOrder) return res.status(200).json({ status: "ALREADY_PROCESSED" });
+    order.status = claimedOrder.status;
+    order.gatewayResponse = claimedOrder.gatewayResponse;
 
     const [brand, plan] = await Promise.all([
       Brand.findById(order.brandId),
       Plan.findById(order.planId),
     ]);
 
-    const brandName = brand?.name || order.productName || "Proxy Provider";
-    const planLabel = plan?.label || order.variationName || "Proxy Plan";
+    // The order's own names include the chosen location
+    const brandName = order.productName || brand?.name || "Proxy Provider";
+    const planLabel = order.variationName || plan?.label || "Proxy Plan";
 
     const claimedItems = await stockService.assignStockToOrder(order);
 

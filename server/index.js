@@ -63,4 +63,17 @@ app.listen(PORT, () => {
   console.log(`📡 [Payment Webhook] Ready at ${process.env.APP_BASE_URL || `http://localhost:${PORT}`}/webhook/payment-ipn`);
 });
 
+// Keep Brands / Plans in step with ipdokan.com so admins can upload stock
+// for every product (also available on demand via POST /api/ipdokan/sync).
+const catalog = require('../services/ipdokan');
+const SYNC_EVERY_MS = 30 * 60 * 1000;
+function syncCatalog() {
+  catalog
+    .syncToStore()
+    .then(({ brands, plans }) => console.log(`🔄 [ipdokan] Synced ${brands} products / ${plans} packages`))
+    .catch((err) => console.error('[ipdokan] Sync failed:', err.message));
+}
+setTimeout(syncCatalog, 5000);
+setInterval(syncCatalog, SYNC_EVERY_MS).unref();
+
 module.exports = app;

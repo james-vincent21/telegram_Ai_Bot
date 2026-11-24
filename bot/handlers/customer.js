@@ -4,9 +4,11 @@ const strings = require("../config/strings");
 const keyboards = require("../keyboards");
 const animator = require("../stepAnimator");
 const woocommerce = require("../../services/woocommerce");
+const catalog = require("../../services/ipdokan");
 const {
   resolveItem,
   maxQuantity,
+  packageLabel,
   createTelegramOrder,
   OrderError,
 } = require("../../services/orderService");
@@ -122,14 +124,22 @@ function registerCustomerHandlers(bot) {
     }
     await ctx.answerCbQuery("Loading package...");
     try {
-      return await showQuantity(ctx, String(order.wooProductId), order.wooVariationId || 0, order.quantity || 1);
+      return await showQuantity(
+        ctx,
+        String(order.wooProductId),
+        order.wooVariationId || 0,
+        order.quantity || 1,
+        undefined,
+        0,
+        order.locationId || 0,
+      );
     } catch (err) {
       console.error("[Renew]", err.message);
       return showAllCategories(ctx);
     }
   });
 
-  // Step 1: User taps "Buy Proxy" or /buy -> Fetch & display ALL categories from WooCommerce
+  // Step 1: User taps "Buy Proxy" or /buy -> Fetch & display ALL categories from ipdokan.com
   bot.hears([strings.buyProxyButton, ...strings.legacyButtons.buyProxy], showAllCategories);
   bot.command("buy", showAllCategories);
 
@@ -137,7 +147,7 @@ function registerCustomerHandlers(bot) {
     await trackUser(ctx.from);
     ctx.sendChatAction("typing").catch(() => {});
     try {
-      const categories = await woocommerce.getCategories();
+      const categories = await catalog.getCategories();
       if (!categories || categories.length === 0) {
         return ctx.reply(strings.loadError("categories", "No categories were found."), {
           parse_mode: "HTML",
@@ -159,7 +169,7 @@ function registerCustomerHandlers(bot) {
     await ctx.answerCbQuery("Loading categories...");
     try {
       const force = ctx.match === "refresh_categories";
-      const categories = await woocommerce.getCategories(force);
+      const categories = await catalog.getCategories(force);
       return await animator.edit(ctx, strings.selectCategory, keyboards.categoriesKeyboard(categories));
     } catch (err) {
       if (/message is not modified/i.test(err.message)) return;
@@ -171,14 +181,14 @@ function registerCustomerHandlers(bot) {
   });
 
   // Step 2: User clicks a Category: cat_<categoryId> -> Fetch & display Products under that Category
-  bot.action(/^cat_(\d+)$/, async (ctx) => {
+  bot.action(/^cat_([a-f0-9]+)$/, async (ctx) => {
     await ctx.answerCbQuery("Loading products...");
     const categoryId = ctx.match[1];
 
     try {
       const [categories, products] = await Promise.all([
-        woocommerce.getCategories(),
-        woocommerce.getProductsByCategory(categoryId),
+        catalog.getCategories(),
+        catalog.getProductsByCategory(categoryId),
       ]);
 
       const currentCat = categories.find(
@@ -209,15 +219,15 @@ function registerCustomerHandlers(bot) {
   });
 
   // Step 3: User clicks a Product: prod_<productId>_<categoryId> -> Show Variations / Packages
-  bot.action(/^prod_(\d+)_(\d+)$/, async (ctx) => {
+  bot.action(/^prod_([a-f0-9]+)_([a-f0-9]+)$/, async (ctx) => {
     await ctx.answerCbQuery("Loading packages...");
     const productId = ctx.match[1];
     const categoryId = ctx.match[2];
 
     try {
       const [product, variations] = await Promise.all([
-        woocommerce.getProduct(productId),
-        woocommerce.getProductVariations(productId),
+        catalog.getProduct(productId),
+        catalog.getProductVariations(productId),
       ]);
 
       if (!variations || variations.length === 0) {
@@ -240,26 +250,36 @@ function registerCustomerHandlers(bot) {
   });
 
   // Step 4: Out of stock click
-  bot.action(/^outofstock_(\d+)$/, async (ctx) => {
+  bot.action(/^outofstock_([a-f0-9]+)$/, async (ctx) => {
     await ctx.answerCbQuery("😔 This package is sold out right now. Please pick another one.", {
       show_alert: true,
     });
   });
 
   // Where "Back" goes from the quantity / sold-out screens
-  function backFrom(productId, variationId, categoryId) {
+  function backFrom(productId, variationId, categoryId, locationId = "0") {
     if (!categoryId || categoryId === "0") return "back_to_cats";
+    if (locationId && locationId !== "0") return `var_${productId}_${variationId}_${categoryId}`;
     return variationId && variationId !== "0" ? `prod_${productId}_${categoryId}` : `cat_${categoryId}`;
   }
 
-  async function showQuantity(ctx, productId, variationId, quantity, prefetched, categoryId = 0) {
+  const notFoundText = "😕 <b>This package could not be found.</b>\n\nPlease pick another one.";
+
+  /** Location list for a package that needs one */
+  async function showLocations(ctx, item, variationId, categoryId = 0) {
+    return animator.edit(
+      ctx,
+      strings.selectLocation(item.product.name, item.name),
+      keyboards.locationsKeyboard(item.product.locations || [], item.product.id, variationId, categoryId),
+    );
+  }
+
+  async function showQuantity(ctx, productId, variationId, quantity, prefetched, categoryId = 0, locationId = 0) {
     const item = await resolveItem(productId, variationId, prefetched);
-    const back = backFrom(productId, String(variationId || 0), String(categoryId || 0));
+    const lid = String(locationId || 0);
+    const back = backFrom(productId, String(variationId || 0), String(categoryId || 0), lid);
     if (!item) {
-      return ctx.editMessageText("😕 <b>This package could not be found.</b>\n\nPlease pick another one.", {
-        parse_mode: "HTML",
-        ...keyboards.navKeyboard(back),
-      });
+      return ctx.editMessageText(notFoundText, { parse_mode: "HTML", ...keyboards.navKeyboard(back) });
     }
     if (!item.inStock) {
       return ctx.editMessageText(strings.outOfStockAlert, {
@@ -267,31 +287,49 @@ function registerCustomerHandlers(bot) {
         ...keyboards.navKeyboard(back),
       });
     }
-    const max = maxQuantity(item);
+
+    // Packages with locations: pick one first
+    let location = null;
+    if (item.chooseLocation) {
+      location = lid !== "0" ? (item.product.locations || []).find((l) => l.id === lid) : null;
+      if (!location) return showLocations(ctx, item, variationId, categoryId);
+      if (!location.inStock) {
+        return ctx.editMessageText(strings.locationSoldOut, {
+          parse_mode: "HTML",
+          ...keyboards.navKeyboard(back),
+        });
+      }
+    }
+
+    let max = maxQuantity(item);
+    if (location?.stock > 0) max = Math.min(max, location.stock);
     const qty = Math.min(max, Math.max(1, quantity));
     return animator.edit(
       ctx,
-      strings.selectQuantity(item.product.name, item.name, item.price, qty, "BDT"),
+      strings.selectQuantity(item.product.name, packageLabel(item.name, location), item.price, qty, "BDT"),
       keyboards.quantityKeyboard(
-        productId,
+        item.product.id,
         variationId,
         qty,
         max,
         `${Math.round(item.price * qty * 100) / 100} BDT`,
         categoryId,
+        location?.id || 0,
       ),
     );
   }
 
   // User picks a Variation / Package: var_<productId>_<variationId>[_<categoryId>]
   // (the categoryId part is optional so buttons from older messages keep working)
-  bot.action(/^var_(\d+)_(\d+)(?:_(\d+))?$/, async (ctx) => {
+  // Packages with locations go to the location list, others to the quantity screen.
+  bot.action(/^var_([a-f0-9]+)_([a-f0-9]+)(?:_([a-f0-9]+))?$/, async (ctx) => {
     await ctx.answerCbQuery();
     const categoryId = ctx.match[3] || 0;
     try {
       return await showQuantity(ctx, ctx.match[1], ctx.match[2], 1, undefined, categoryId);
     } catch (err) {
-      console.error("[Quantity Error]:", err.message);
+      if (/message is not modified/i.test(err.message)) return;
+      console.error("[Package Error]:", err.message);
       return ctx.editMessageText(strings.loadError("the package"), {
         parse_mode: "HTML",
         ...keyboards.retryKeyboard(ctx.match[0]),
@@ -299,8 +337,23 @@ function registerCustomerHandlers(bot) {
     }
   });
 
-  // Quantity stepper: qty_<productId>_<variationId>_<qty>[_<categoryId>]
-  bot.action(/^qty_(\d+)_(\d+)_(\d+)(?:_(\d+))?$/, async (ctx) => {
+  // User picks a Location: loc_<productId>_<variationId>_<locationId>_<categoryId>
+  bot.action(/^loc_([a-f0-9]+)_([a-f0-9]+)_([A-Za-z0-9-]+)_([a-f0-9]+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    try {
+      return await showQuantity(ctx, ctx.match[1], ctx.match[2], 1, undefined, ctx.match[4], ctx.match[3]);
+    } catch (err) {
+      if (/message is not modified/i.test(err.message)) return;
+      console.error("[Location Error]:", err.message);
+      return ctx.editMessageText(strings.loadError("the location"), {
+        parse_mode: "HTML",
+        ...keyboards.retryKeyboard(ctx.match[0]),
+      });
+    }
+  });
+
+  // Quantity stepper: qty_<productId>_<variationId>_<qty>[_<categoryId>[_<locationId>]]
+  bot.action(/^qty_([a-f0-9]+)_([a-f0-9]+)_(\d+)(?:_([a-f0-9]+))?(?:_([A-Za-z0-9-]+))?$/, async (ctx) => {
     await ctx.answerCbQuery();
     try {
       return await showQuantity(
@@ -310,6 +363,7 @@ function registerCustomerHandlers(bot) {
         parseInt(ctx.match[3], 10),
         undefined,
         ctx.match[4] || 0,
+        ctx.match[5] || 0,
       );
     } catch (err) {
       // Telegram rejects edits that change nothing (e.g. tapping the counter)
@@ -319,33 +373,36 @@ function registerCustomerHandlers(bot) {
     }
   });
 
-  // Confirm: buy_<productId>_<variationId>_<qty>[_<categoryId>] -> create order + payment link
-  bot.action(/^buy_(\d+)_(\d+)_(\d+)(?:_(\d+))?$/, async (ctx) => {
+  // Confirm: buy_<productId>_<variationId>_<qty>[_<categoryId>[_<locationId>]] -> create order + payment link
+  bot.action(/^buy_([a-f0-9]+)_([a-f0-9]+)_(\d+)(?:_([a-f0-9]+))?(?:_([A-Za-z0-9-]+))?$/, async (ctx) => {
     await ctx.answerCbQuery("Generating payment link...");
     const productId = ctx.match[1];
     const variationId = ctx.match[2] === "0" ? null : ctx.match[2];
-    const back = backFrom(productId, ctx.match[2], ctx.match[4] || "0");
+    const locationId = ctx.match[5] && ctx.match[5] !== "0" ? ctx.match[5] : null;
+    const back = backFrom(productId, ctx.match[2], ctx.match[4] || "0", ctx.match[5] || "0");
 
     try {
-      const { order, item, total, paymentUrl } = await createTelegramOrder({
+      const { order, total, paymentUrl } = await createTelegramOrder({
         from: ctx.from,
         productId,
         variationId,
         quantity: ctx.match[3],
+        locationId,
       });
       return await animator.edit(
         ctx,
-        strings.orderSummary(item.product.name, item.name, total, "BDT", order.orderId, order.quantity),
+        strings.orderSummary(order.productName, order.variationName, total, "BDT", order.orderId, order.quantity),
         keyboards.orderPaymentKeyboard(paymentUrl, order.orderId, total, "BDT"),
       );
     } catch (err) {
       if (err instanceof OrderError) {
-        return ctx.editMessageText(
+        const text =
           err.code === "out_of_stock"
             ? strings.outOfStockAlert
-            : "😕 <b>This package could not be found.</b>\n\nPlease pick another one.",
-          { parse_mode: "HTML", ...keyboards.navKeyboard(back) },
-        );
+            : err.code === "location_required"
+              ? "📍 <b>Please choose a location first.</b>"
+              : notFoundText;
+        return ctx.editMessageText(text, { parse_mode: "HTML", ...keyboards.navKeyboard(back) });
       }
       console.error("[OrderCreation Error]:", err.message);
       return ctx.editMessageText(strings.orderCreateError, {
@@ -477,8 +534,11 @@ function registerCustomerHandlers(bot) {
     if (!order) return false;
 
     // Cancel website-side first. This prevents a stale payment URL from being used.
+    // (Only old orders have one; ipdokan.com orders are paid via SSLCommerz.)
     if (order.wooOrderId && !order.wooOrderId.startsWith("DIRECT-")) {
-      await woocommerce.cancelOrder(order.wooOrderId);
+      await woocommerce.cancelOrder(order.wooOrderId).catch((err) => {
+        console.warn(`[Cancel] Website order ${order.wooOrderId} not cancelled:`, err.message);
+      });
     }
 
     // Conditional update prevents overwriting a payment webhook that arrived meanwhile.

@@ -24,6 +24,9 @@ const planSchema = new mongoose.Schema(
       uppercase: true,
       trim: true,
     },
+    // Linked ipdokan.com package (set by the catalog sync)
+    ipdokanVariantId: { type: String, default: null, index: true },
+    chooseLocation: { type: Boolean, default: false },
     durationDays: {
       type: Number,
       default: 30,

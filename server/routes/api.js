@@ -13,7 +13,7 @@ const Ticket = require("../../models/Ticket");
 const Broadcast = require("../../models/Broadcast");
 const broadcastService = require("../../services/broadcast");
 const stockService = require("../../services/stockService");
-const woocommerce = require("../../services/woocommerce");
+const catalog = require("../../services/ipdokan");
 const strings = require("../../bot/config/strings");
 const keyboards = require("../../bot/keyboards");
 const { bot } = require("../../bot/index");
@@ -158,91 +158,39 @@ router.get("/stats", async (req, res) => {
 });
 
 // ==========================================
-// 3. WooCommerce Integration Endpoints
+// 3. ipdokan.com catalog
 // ==========================================
-router.get("/woocommerce/products", async (req, res) => {
+// Every product with its packages and locations, as the bot shows them
+router.get("/ipdokan/products", async (req, res) => {
   try {
-    const type = req.query.type || "all";
-    if (type === "gb" || type === "ip") {
-      const products = await woocommerce.getProductsByType(type);
-      return res.json(products);
-    }
-    const [gb, ip] = await Promise.all([
-      woocommerce.getProductsByType("gb"),
-      woocommerce.getProductsByType("ip"),
-    ]);
-    return res.json({ gb, ip });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-router.get("/woocommerce/products/:id/variations", async (req, res) => {
-  try {
-    const variations = await woocommerce.getProductVariations(req.params.id);
-    return res.json(variations);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-router.post("/woocommerce/sync", async (req, res) => {
-  try {
-    const [gbProducts, ipProducts] = await Promise.all([
-      woocommerce.getProductsByType("gb", true),
-      woocommerce.getProductsByType("ip", true),
-    ]);
-
-    let syncedBrands = 0;
-    let syncedPlans = 0;
-
-    const allProds = [
-      ...gbProducts.map((p) => ({ ...p, proxyType: "gb" })),
-      ...ipProducts.map((p) => ({ ...p, proxyType: "ip" })),
-    ];
-
-    for (const p of allProds) {
-      const brand = await Brand.findOneAndUpdate(
-        { name: p.name },
-        {
-          $set: {
-            name: p.name,
-            emoji: p.proxyType === "gb" ? "🌐" : "🔢",
-            description: `WooCommerce ID: ${p.id}`,
-            isActive: true,
-          },
-        },
-        { upsert: true, new: true },
-      );
-      syncedBrands++;
-
-      if (p.hasVariations) {
-        const variations = await woocommerce.getProductVariations(p.id, true);
-        for (const v of variations) {
-          await Plan.findOneAndUpdate(
-            { brandId: brand._id, label: v.name },
-            {
-              $set: {
-                brandId: brand._id,
-                label: v.name,
-                price: parseFloat(v.price) || 0,
-                currency: "BDT",
-                isActive: v.inStock,
-              },
-            },
-            { upsert: true },
-          );
-          syncedPlans++;
-        }
+    const categories = await catalog.getCategories(req.query.refresh === "1");
+    const result = [];
+    for (const c of categories) {
+      for (const p of await catalog.getProductsByCategory(c.id)) {
+        const [product, packages] = await Promise.all([
+          catalog.getProduct(p.id),
+          catalog.getProductVariations(p.id),
+        ]);
+        result.push({ ...p, category: c.name, locations: product.locations, packages });
       }
     }
+    return res.json(result);
+  } catch (err) {
+    return res.status(502).json({ error: `ipdokan.com: ${err.message}` });
+  }
+});
 
+// Mirrors ipdokan.com products into Brands / Plans (so stock can be uploaded).
+// "/woocommerce/sync" is kept for older admin panel builds.
+router.post(["/ipdokan/sync", "/woocommerce/sync"], async (req, res) => {
+  try {
+    const { brands, plans } = await catalog.syncToStore();
     return res.json({
       success: true,
-      message: `Synchronized ${syncedBrands} brands and ${syncedPlans} packages from ipdokan.com!`,
+      message: `Synchronized ${brands} products and ${plans} packages from ipdokan.com!`,
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(502).json({ error: `ipdokan.com sync failed: ${err.message}` });
   }
 });
 
@@ -428,6 +376,8 @@ router.post("/stock/bulk", async (req, res) => {
       wooVariationId,
       productName,
       variationName,
+      locationId,
+      locationName,
       credentials,
       batchNote,
     } = req.body;
@@ -443,6 +393,8 @@ router.post("/stock/bulk", async (req, res) => {
         wooVariationId,
         productName,
         variationName,
+        locationId,
+        locationName,
       },
       credentials,
       batchNote,

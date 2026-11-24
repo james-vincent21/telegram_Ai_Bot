@@ -8,7 +8,7 @@ const crypto = require("crypto");
 const router = express.Router();
 
 const Order = require("../../models/Order");
-const woocommerce = require("../../services/woocommerce");
+const catalog = require("../../services/ipdokan");
 const { createTelegramOrder, OrderError, MAX_QUANTITY } = require("../../services/orderService");
 const strings = require("../../bot/config/strings");
 const keyboards = require("../../bot/keyboards");
@@ -53,10 +53,10 @@ router.use((req, res, next) => {
 // Categories with their products
 router.get("/catalog", async (req, res) => {
   try {
-    const categories = await woocommerce.getCategories();
+    const categories = await catalog.getCategories();
     const withProducts = await Promise.all(
       categories.map(async (c) => {
-        const products = await woocommerce.getProductsByCategory(c.id).catch(() => []);
+        const products = await catalog.getProductsByCategory(c.id).catch(() => []);
         return {
           id: c.id,
           name: c.name,
@@ -83,8 +83,8 @@ router.get("/catalog", async (req, res) => {
 router.get("/products/:id", async (req, res) => {
   try {
     const [product, variations] = await Promise.all([
-      woocommerce.getProduct(req.params.id),
-      woocommerce.getProductVariations(req.params.id).catch(() => []),
+      catalog.getProduct(req.params.id),
+      catalog.getProductVariations(req.params.id).catch(() => []),
     ]);
     const packages = variations.length
       ? variations.map((v) => ({
@@ -93,6 +93,7 @@ router.get("/products/:id", async (req, res) => {
           price: parseFloat(v.price) || 0,
           inStock: Boolean(v.inStock) && v.stockQuantity !== 0,
           stock: v.stockQuantity ?? null,
+          chooseLocation: Boolean(v.chooseLocation),
         }))
       : [
           {
@@ -101,6 +102,7 @@ router.get("/products/:id", async (req, res) => {
             price: parseFloat(product.price) || 0,
             inStock: product.stock_status === "instock" && product.stock_quantity !== 0,
             stock: product.stock_quantity ?? null,
+            chooseLocation: false,
           },
         ];
     return res.json({
@@ -109,6 +111,7 @@ router.get("/products/:id", async (req, res) => {
       image: product.images?.[0]?.src || "",
       description: String(product.short_description || "").replace(/<[^>]+>/g, "").trim().slice(0, 400),
       maxQuantity: MAX_QUANTITY,
+      locations: (product.locations || []).map((l) => ({ id: l.id, name: l.name, stock: l.stock, inStock: l.inStock })),
       packages,
     });
   } catch (err) {
@@ -119,14 +122,18 @@ router.get("/products/:id", async (req, res) => {
 
 // Place an order → returns the payment link
 router.post("/orders", async (req, res) => {
-  const { productId, variationId, quantity } = req.body || {};
-  if (!/^\d+$/.test(String(productId))) return res.status(400).json({ error: "Invalid product" });
+  const { productId, variationId, quantity, locationId } = req.body || {};
+  if (!/^[a-f0-9]{1,24}$/i.test(String(productId))) return res.status(400).json({ error: "Invalid product" });
+  if (locationId != null && !/^[A-Za-z0-9-]{1,32}$/.test(String(locationId))) {
+    return res.status(400).json({ error: "Invalid location" });
+  }
   try {
-    const { order, item, total, paymentUrl } = await createTelegramOrder({
+    const { order, total, paymentUrl } = await createTelegramOrder({
       from: req.tgUser,
       productId: String(productId),
       variationId: variationId ? String(variationId) : null,
       quantity,
+      locationId: locationId != null ? String(locationId) : null,
       source: "shop",
     });
 
@@ -134,7 +141,7 @@ router.post("/orders", async (req, res) => {
     bot.telegram
       .sendMessage(
         req.tgUser.id,
-        strings.orderSummary(item.product.name, item.name, total, "BDT", order.orderId, order.quantity).replace(/%%STEPS:\d%%\n?/, ""),
+        strings.orderSummary(order.productName, order.variationName, total, "BDT", order.orderId, order.quantity).replace(/%%STEPS:\d%%\n?/, ""),
         { parse_mode: "HTML", ...keyboards.orderPaymentKeyboard(paymentUrl, order.orderId, total, "BDT") },
       )
       .catch(() => {});
@@ -153,7 +160,7 @@ router.get("/orders", async (req, res) => {
     const orders = await Order.find({ telegramId: req.tgUser.id })
       .sort({ createdAt: -1 })
       .limit(20)
-      .select("orderId productName variationName quantity amount currency status createdAt expiresAt deliveredCredentials gatewayRedirectUrl");
+      .select("orderId productName variationName locationName quantity amount currency status createdAt expiresAt deliveredCredentials gatewayRedirectUrl");
     return res.json({ orders });
   } catch (err) {
     return res.status(500).json({ error: err.message });

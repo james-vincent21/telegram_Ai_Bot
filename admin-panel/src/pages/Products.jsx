@@ -221,7 +221,7 @@ export default function Products() {
               if (loading) return;
               setLoading(true);
               try {
-                const res = await api.post("/woocommerce/sync");
+                const res = await api.post("/ipdokan/sync");
                 alert(res.data?.message || "Sync successful!");
                 fetchData();
               } catch (err) {
@@ -234,7 +234,7 @@ export default function Products() {
             className="inline-flex items-center gap-2 px-4 py-2.5 btn-gradient-cyan text-white rounded-xl text-sm font-semibold transition"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />{" "}
-            Sync with WooCommerce
+            Sync with ipdokan.com
           </button>
           <button
             onClick={() => handleOpenBrandModal()}

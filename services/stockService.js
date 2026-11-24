@@ -11,36 +11,50 @@ const Plan = require("../models/Plan");
  * @returns {Promise<Object[]>} - Claimed Stock documents ([] if stock is short)
  */
 async function assignStockToOrder(order) {
-  const query = { isUsed: false };
+  const base = { isUsed: false };
 
-  if (order.wooVariationId) {
-    query.wooVariationId = order.wooVariationId;
+  // ipdokan orders carry both the Plan (admin uploads) and the ipdokan
+  // package id; either one identifies the right stock.
+  if (order.planId && order.wooVariationId) {
+    base.$or = [{ planId: order.planId }, { wooVariationId: order.wooVariationId }];
+  } else if (order.wooVariationId) {
+    base.wooVariationId = order.wooVariationId;
   } else if (order.wooProductId) {
-    query.wooProductId = order.wooProductId;
+    base.wooProductId = order.wooProductId;
   } else if (order.brandId && order.planId) {
-    query.brandId = order.brandId;
-    query.planId = order.planId;
+    base.brandId = order.brandId;
+    base.planId = order.planId;
   }
+
+  // Location: stock for the exact location first, then stock marked "any
+  // location". Orders without a location only take "any location" stock.
+  const queries = order.locationId
+    ? [{ ...base, locationId: String(order.locationId) }, { ...base, locationId: null }]
+    : [{ ...base, locationId: null }];
 
   const quantity = Math.max(1, order.quantity || 1);
   const claimed = [];
 
   for (let i = 0; i < quantity; i++) {
-    const item = await Stock.findOneAndUpdate(
-      query,
-      {
-        $set: {
-          isUsed: true,
-          assignedToTelegramId: order.telegramId,
-          assignedAt: new Date(),
-          orderId: order._id,
+    let item = null;
+    for (const query of queries) {
+      item = await Stock.findOneAndUpdate(
+        query,
+        {
+          $set: {
+            isUsed: true,
+            assignedToTelegramId: order.telegramId,
+            assignedAt: new Date(),
+            orderId: order._id,
+          },
         },
-      },
-      {
-        new: true, // returns updated doc
-        sort: { createdAt: 1 }, // FIFO - allocate oldest stock first
-      },
-    );
+        {
+          new: true, // returns updated doc
+          sort: { createdAt: 1 }, // FIFO - allocate oldest stock first
+        },
+      );
+      if (item) break;
+    }
     if (!item) break;
     claimed.push(item);
   }
@@ -70,7 +84,7 @@ async function assignStockToOrder(order) {
  * Bulk adds credentials for a brand/plan or WooCommerce product/variation.
  * Accepts an array of credential strings or a newline-delimited text block.
  *
- * @param {Object} target - { brandId, planId, wooProductId, wooVariationId, productName, variationName }
+ * @param {Object} target - { brandId, planId, wooProductId, wooVariationId, productName, variationName, locationId, locationName }
  * @param {string[]|string} credentialsInput
  * @param {string} [batchNote]
  * @returns {Promise<{addedCount: number, errors: string[]}>}
@@ -99,6 +113,8 @@ async function bulkAddStock(target, credentialsInput, batchNote = "") {
     variationName: target.variationName || "",
     brandId: target.brandId || null,
     planId: target.planId || null,
+    locationId: target.locationId ? String(target.locationId) : null,
+    locationName: target.locationId ? target.locationName || "" : "",
     credentials: cred,
     isUsed: false,
     batchNote:
@@ -117,6 +133,7 @@ async function getAvailableStockCount(target) {
   if (target.wooVariationId) query.wooVariationId = target.wooVariationId;
   else if (target.wooProductId) query.wooProductId = target.wooProductId;
   else if (target.planId) query.planId = target.planId;
+  if (target.locationId !== undefined) query.locationId = target.locationId ? String(target.locationId) : null;
   return Stock.countDocuments(query);
 }
 

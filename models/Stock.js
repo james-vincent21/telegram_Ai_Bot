@@ -3,15 +3,18 @@ const mongoose = require("mongoose");
 const stockSchema = new mongoose.Schema(
   {
     wooProductId: {
-      type: Number,
+      type: mongoose.Schema.Types.Mixed, // number (old WooCommerce) or hex string (ipdokan.com)
       default: null,
       index: true,
     },
     wooVariationId: {
-      type: Number,
+      type: mongoose.Schema.Types.Mixed, // number (old WooCommerce) or hex string (ipdokan.com)
       default: null,
       index: true,
     },
+    // Location this credential is for (null = any location)
+    locationId: { type: String, default: null, index: true },
+    locationName: { type: String, default: "" },
     productName: {
       type: String,
       default: "",

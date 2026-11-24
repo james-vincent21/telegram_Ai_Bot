@@ -30,6 +30,7 @@ export default function Stock() {
   const [uploadForm, setUploadForm] = useState({
     brandId: '',
     planId: '',
+    locationId: '',
     credentials: '',
     batchNote: '',
   });
@@ -88,6 +89,7 @@ export default function Stock() {
     setUploadForm({
       brandId,
       planId,
+      locationId: '',
       credentials: '',
       batchNote: '',
     });
@@ -103,7 +105,12 @@ export default function Stock() {
 
     setUploading(true);
     try {
-      const res = await api.post('/stock/bulk', uploadForm);
+      const location = uploadLocations.find((l) => l.id === uploadForm.locationId);
+      const res = await api.post('/stock/bulk', {
+        ...uploadForm,
+        locationId: location ? location.id : null,
+        locationName: location ? location.name : '',
+      });
       alert(`✅ Successfully added ${res.data.addedCount} credentials into inventory!`);
       setUploadModalOpen(false);
       fetchData();
@@ -151,6 +158,10 @@ export default function Stock() {
   const filteredUploadPlans = plans.filter(
     (p) => (p.brandId?._id || p.brandId) === uploadForm.brandId
   );
+  // ipdokan.com packages sold per location (static residential, ISP…)
+  const uploadPlan = plans.find((p) => p._id === uploadForm.planId);
+  const uploadBrand = brands.find((b) => b._id === uploadForm.brandId);
+  const uploadLocations = uploadPlan?.chooseLocation ? uploadBrand?.locations || [] : [];
 
   return (
     <div className="animate-fade-up space-y-10">
@@ -311,6 +322,9 @@ export default function Stock() {
                             {item.brandId?.name || 'Unknown'}
                           </div>
                           <div className="text-[11px] text-gray-500">{item.planId?.label || 'Plan'}</div>
+                          {item.locationName && (
+                            <div className="text-[11px] text-blue-400">📍 {item.locationName}</div>
+                          )}
                         </td>
                         <td className="py-3.5 px-5">
                           <div className="flex items-center gap-2 font-mono text-xs">
@@ -416,7 +430,7 @@ export default function Stock() {
                   <select
                     required
                     value={uploadForm.planId}
-                    onChange={(e) => setUploadForm({ ...uploadForm, planId: e.target.value })}
+                    onChange={(e) => setUploadForm({ ...uploadForm, planId: e.target.value, locationId: '' })}
                     className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
                   >
                     {filteredUploadPlans.length === 0 ? (
@@ -433,6 +447,24 @@ export default function Stock() {
                   </select>
                 </div>
               </div>
+
+              {uploadLocations.length > 0 && (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1">📍 Location</label>
+                  <select
+                    value={uploadForm.locationId}
+                    onChange={(e) => setUploadForm({ ...uploadForm, locationId: e.target.value })}
+                    className="w-full field border border-gray-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
+                  >
+                    <option value="">Any location (used when the chosen location has no stock)</option>
+                    {uploadLocations.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div>
                 <div className="flex items-center justify-between mb-1">

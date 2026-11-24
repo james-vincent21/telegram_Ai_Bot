@@ -220,7 +220,7 @@
   backBtn.onclick = back;
   tg?.BackButton?.onClick(back);
 
-  const state = { screen: null, tab: "shop", catalog: null, cat: "all", q: "", product: null, pkg: null, qty: 1, orders: null, placed: null, busy: false };
+  const state = { screen: null, tab: "shop", catalog: null, cat: "all", q: "", product: null, pkg: null, loc: null, qty: 1, orders: null, placed: null, busy: false };
 
   function tabs() {
     return `<div class="tabs">
@@ -282,7 +282,7 @@
   }
 
   async function openProduct(id) {
-    state.product = null; state.pkg = null; state.qty = 1;
+    state.product = null; state.pkg = null; state.loc = null; state.qty = 1;
     go("product");
     try {
       state.product = await api(`/products/${id}`);
@@ -299,8 +299,18 @@
   }
   function maxQty() {
     const p = state.pkg; if (!p) return 1;
-    const cap = state.product?.maxQuantity || 50;
-    return p.stock > 0 ? Math.min(cap, p.stock) : cap;
+    let cap = state.product?.maxQuantity || 50;
+    if (p.stock > 0) cap = Math.min(cap, p.stock);
+    if (needsLoc() && state.loc?.stock > 0) cap = Math.min(cap, state.loc.stock);
+    return cap;
+  }
+  // The selected package needs a location that hasn't been picked yet
+  function needsLoc() { return Boolean(state.pkg?.chooseLocation && state.product?.locations?.length); }
+  function ready() { return Boolean(state.pkg && (!needsLoc() || state.loc)); }
+  function locColor(l) {
+    if (!l.inStock) return "red";
+    if (l.stock != null && l.stock < LOW) return "yellow";
+    return "green";
   }
 
   function renderProduct() {
@@ -324,18 +334,30 @@
           <span class="info"><b>${esc(x.name)}</b><em>${c === "red" ? "Sold out" : c === "yellow" ? `Only ${x.stock} left · hurry!` : x.stock != null ? `${x.stock} in stock` : "In stock"}</em></span>
           <span class="amt">${money(x.price)}</span>
         </button>`; }).join("")}
-      ${p ? `
+      ${p && needsLoc() ? `
+        <div class="section">📍 CHOOSE A LOCATION</div>
+        ${pr.locations.map((l, i) => { const c = locColor(l); return `
+          <button class="pkg ${c} ${state.loc && state.loc.id === l.id ? "sel" : ""}" data-loc="${i}" ${c === "red" ? "aria-disabled=true" : ""} style="animation-delay:${i * 30}ms">
+            <span class="dot"></span>
+            <span class="info"><b>${esc(l.name)}</b><em>${c === "red" ? "Sold out" : l.stock != null ? `${l.stock} IPs available` : "Available"}</em></span>
+          </button>`; }).join("")}` : ""}
+      ${ready() ? `
         <div class="section">QUANTITY</div>
         <div class="qty"><button class="minus" id="minus" ${state.qty <= 1 ? "disabled" : ""}>−</button><span class="n">${state.qty}</span><button class="plus" id="plus" ${state.qty >= max ? "disabled" : ""}>+</button></div>
         <div class="presets">${[1, 5, 10, 25].filter((n) => n <= max).map((n) => `<button data-q="${n}" class="${n === state.qty ? "on" : ""}">×${n}</button>`).join("")}</div>` : ""}`;
 
-    bar.innerHTML = `<button class="buy" id="buy" ${!p || state.busy ? "disabled" : ""}>
-      <span>${state.busy ? "Creating order…" : p ? "🛒 Buy now" : "Choose a package"}</span><span>${p ? money(total) : ""}</span></button>`;
+    bar.innerHTML = `<button class="buy" id="buy" ${!ready() || state.busy ? "disabled" : ""}>
+      <span>${state.busy ? "Creating order…" : ready() ? "🛒 Buy now" : p ? "Choose a location" : "Choose a package"}</span><span>${p ? money(total) : ""}</span></button>`;
 
     view.querySelectorAll("[data-pkg]").forEach((b) => (b.onclick = () => {
       const x = pr.packages[+b.dataset.pkg];
       if (pkgColor(x) === "red") { haptic.warn(); toast("😔 This package is sold out. Please pick another one."); return; }
       haptic.select(); state.pkg = x; state.qty = Math.min(state.qty, maxQty()); renderProduct();
+    }));
+    view.querySelectorAll("[data-loc]").forEach((b) => (b.onclick = () => {
+      const l = pr.locations[+b.dataset.loc];
+      if (locColor(l) === "red") { haptic.warn(); toast("😔 This location is sold out. Please pick another one."); return; }
+      haptic.select(); state.loc = l; state.qty = Math.min(state.qty, maxQty()); renderProduct();
     }));
     const setQ = (n) => { const v = Math.max(1, Math.min(maxQty(), n)); if (v === state.qty) { haptic.warn(); return; } haptic.select(); state.qty = v; renderProduct(); };
     $("#minus") && ($("#minus").onclick = () => setQ(state.qty - 1));
@@ -345,10 +367,10 @@
   }
 
   async function placeOrder() {
-    if (!state.pkg || state.busy) return;
+    if (!ready() || state.busy) return;
     haptic.soft(); state.busy = true; renderProduct();
     try {
-      const r = await api("/orders", { method: "POST", body: JSON.stringify({ productId: state.product.id, variationId: state.pkg.id || null, quantity: state.qty }) });
+      const r = await api("/orders", { method: "POST", body: JSON.stringify({ productId: state.product.id, variationId: state.pkg.id || null, locationId: needsLoc() ? state.loc.id : null, quantity: state.qty }) });
       haptic.ok();
       state.placed = r; state.orders = null;
       go("placed");
@@ -361,7 +383,7 @@
     const r = state.placed;
     title.textContent = "Order created";
     view.innerHTML = `<div class="success"><div class="ring">✓</div><h2>Order ${esc(r.orderId)}</h2>
-      <p>Total <b style="color:#fff">${money(r.total)}</b><br>Finish the payment on our website. Your proxy will arrive in the chat right after.</p>
+      <p>Total <b style="color:#fff">${money(r.total)}</b><br>Finish the payment on the secure checkout page. Your proxy will arrive in the chat right after.</p>
       <div class="row"><button class="btn pay" id="pay">💳 Pay now</button></div>
       <div class="row"><button class="btn" id="more">🛍 Keep shopping</button><button class="btn" id="mine">🧾 My orders</button></div></div>`;
     bar.innerHTML = "";

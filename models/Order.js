@@ -14,13 +14,16 @@ const orderSchema = new mongoose.Schema(
       index: true,
     },
     wooProductId: {
-      type: Number,
+      type: mongoose.Schema.Types.Mixed, // number (old WooCommerce) or hex string (ipdokan.com)
       default: null,
     },
     wooVariationId: {
-      type: Number,
+      type: mongoose.Schema.Types.Mixed, // number (old WooCommerce) or hex string (ipdokan.com)
       default: null,
     },
+    // Location the customer chose (ipdokan products with chooseLocation)
+    locationId: { type: String, default: null },
+    locationName: { type: String, default: "" },
     productName: {
       type: String,
       default: "",

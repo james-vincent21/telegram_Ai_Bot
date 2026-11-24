@@ -140,6 +140,12 @@ module.exports = {
   selectPlan: (productName) =>
     `📦 <b>CHOOSE A PACKAGE</b>\n<i>for ${productName}</i>\n\n${steps(3)}\n${LINE}\n\n` +
     `Choose a package.\n<i>🟢 10+ in stock · 🟡 fewer than 10 left · 🔴 sold out</i>`,
+  selectLocation: (productName, planLabel) =>
+    `📍 <b>CHOOSE A LOCATION</b>\n<i>${productName}</i>\n\n${steps(3)}\n${LINE}\n\n` +
+    `📦 <b>Package:</b> ${planLabel}\n\n` +
+    `Where should your IPs be?\n<i>The number shows how many IPs are available there.</i>`,
+  locationSoldOut:
+    `😔 <b>Location sold out</b>\n\nThere are no IPs left in this location right now. Please pick another one.`,
   selectQuantity: (productName, planLabel, unitPrice, quantity, currency) =>
     `🔢 <b>CHOOSE QUANTITY</b>\n<i>${productName}</i>\n\n${steps(4)}\n${LINE}\n\n` +
     `📦 <b>Package:</b> ${planLabel}\n` +
@@ -156,8 +162,8 @@ module.exports = {
     `${quantity > 1 ? `\n🔢 <b>Quantity:</b> ${quantity}` : ""}\n` +
     `🆔 <b>Order ID:</b> <code>${orderId}</code></blockquote>\n\n` +
     `💰 <b>Total to pay:</b> <b>${price} ${currency}</b>\n${THIN}\n` +
-    `💳 Tap <b>Pay Securely</b> below to finish on our website.\n` +
-    `<i>bKash · Nagad · Rocket · Binance · Wallet</i>\n\n` +
+    `💳 Tap <b>Pay Securely</b> below to open the secure SSLCommerz checkout.\n` +
+    `<i>bKash · Nagad · Rocket · Card · Net banking</i>\n\n` +
     `⚡ Your proxy will appear in this chat as soon as payment is confirmed.`,
   payButtonText: (amount, currency) => `💳 Pay Securely · ${amount} ${currency}`,
   cancelButtonText: "✖️ Cancel Order",
