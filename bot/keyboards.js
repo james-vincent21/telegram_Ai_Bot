@@ -199,6 +199,15 @@ function paymentMethodsKeyboard(order, methods) {
   return Markup.inlineKeyboard(rows);
 }
 
+/** One "Pay Now" button that opens the checkout page (it asks how to pay) */
+function checkoutKeyboard(link, orderId, totals) {
+  return Markup.inlineKeyboard([
+    [url(strings.payNowButton(totals), link, GREEN)],
+    [cb(strings.cancelButtonText, `cancel_order_${orderId}`, RED)],
+    [cb("🏠 Home", "go_home", GREEN)],
+  ]);
+}
+
 /** Checkout: pay (green) / cancel (red) */
 function orderPaymentKeyboard(checkoutUrl, orderId, amount, currency) {
   return Markup.inlineKeyboard([
@@ -342,6 +351,7 @@ module.exports = {
   quantityKeyboard,
   orderPaymentKeyboard,
   paymentMethodsKeyboard,
+  checkoutKeyboard,
   userOrdersKeyboard,
   afterDeliveryKeyboard,
   retryKeyboard,

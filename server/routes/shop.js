@@ -159,16 +159,21 @@ router.post("/orders", async (req, res) => {
 
     const methods = methodsFor(order);
 
-    // Also drop the order + payment buttons into the chat, so it's never lost
+    const checkoutUrl = payLink(order.orderId);
+    const totals = [`${order.amount} ৳`, ...(methods.some((m) => m.currency === "USD") ? [`$${order.amountUsd}`] : [])].join(" / ");
+
+    // Also drop the order + Pay Now button into the chat, so it's never lost
     bot.telegram
       .sendMessage(
         req.tgUser.id,
-        strings.choosePayment(order.productName, order.variationName, order.orderId, order.quantity, order.serviceFeePercent).replace(/%%STEPS:\d%%\n?/, ""),
-        { parse_mode: "HTML", ...keyboards.paymentMethodsKeyboard(order, methods) },
+        strings
+          .checkoutReady(order.productName, order.variationName, order.orderId, order.quantity, totals, order.serviceFeePercent)
+          .replace(/%%STEPS:\d%%\n?/, ""),
+        { parse_mode: "HTML", ...keyboards.checkoutKeyboard(checkoutUrl, order.orderId, totals) },
       )
       .catch(() => {});
 
-    return res.json({ orderId: order.orderId, total, currency: "BDT", totalUsd: order.amountUsd, methods });
+    return res.json({ orderId: order.orderId, total, currency: "BDT", totalUsd: order.amountUsd, methods, checkoutUrl });
   } catch (err) {
     if (err instanceof OrderError) return res.status(409).json({ error: err.message });
     console.error("[Shop] order:", err.message);
@@ -201,10 +206,8 @@ router.get("/orders", async (req, res) => {
       orders: orders.map((o) => ({
         ...o.toObject(),
         gatewayRedirectUrl: undefined,
-        payLink:
-          o.status === "pending" && (o.paymentGateway || o.lastPaymentGateway)
-            ? payLink(o.orderId, o.paymentGateway || o.lastPaymentGateway)
-            : null,
+        // Pending orders: the checkout page (asks how to pay, or "Continue")
+        payLink: o.status === "pending" ? payLink(o.orderId) : null,
       })),
     });
   } catch (err) {

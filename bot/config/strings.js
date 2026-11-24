@@ -158,6 +158,18 @@ module.exports = {
       : `\n💰 <b>Total: ${formatMoney(unitPrice * quantity)} ${currency}</b></blockquote>\n\n`) +
     `<i>Use ➖ / ➕ or a preset, then tap Confirm.</i>`,
 
+  checkoutReady: (brandName, planLabel, orderId, quantity = 1, totals = "", feePercent = 0) =>
+    `💳 <b>COMPLETE PAYMENT</b>\n<i>Your order is ready</i>\n\n${steps(5)}\n${LINE}\n\n` +
+    `<blockquote>🏷 <b>Provider:</b> ${brandName}\n` +
+    `📦 <b>Package:</b> ${planLabel}` +
+    `${quantity > 1 ? `\n🔢 <b>Quantity:</b> ${quantity}` : ""}\n` +
+    `🆔 <b>Order ID:</b> <code>${orderId}</code></blockquote>\n\n` +
+    `💰 <b>Total:</b> ${totals}\n` +
+    `${feePercent > 0 ? `<i>Includes the ${feePercent}% service fee.</i>\n` : ""}${THIN}\n` +
+    `💳 Tap <b>Pay Now</b> — the payment page opens and asks how you want to pay:\n` +
+    `bKash / Nagad, or crypto (USDT, BTC…).\n\n` +
+    `⚡ Your proxy will appear in this chat as soon as payment is confirmed.`,
+  payNowButton: (totals) => `💳 Pay Now · ${totals}`,
   choosePayment: (brandName, planLabel, orderId, quantity = 1, feePercent = 0) =>
     `💳 <b>CHOOSE HOW TO PAY</b>\n<i>Your order is ready</i>\n\n${steps(5)}\n${LINE}\n\n` +
     `<blockquote>🏷 <b>Provider:</b> ${brandName}\n` +

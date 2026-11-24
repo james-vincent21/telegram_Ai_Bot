@@ -541,17 +541,83 @@ router.get("/pay/:orderId", async (req, res) => {
     if (order.status !== "pending") {
       return page({ title: "Order closed", statusText: "This order is closed", subText: "It was cancelled or could not be completed. Please place a new order from the Telegram bot.", isSuccess: false });
     }
-    if (order.paymentGateway && order.gatewayRedirectUrl && (!gateway || order.paymentGateway === gateway)) {
+    // No method in the link: the checkout page asks how to pay
+    if (!gateway) return res.send(renderCheckoutPage(order));
+
+    if (order.paymentGateway && order.gatewayRedirectUrl && order.paymentGateway === gateway) {
       return res.redirect(302, order.gatewayRedirectUrl);
     }
-    // No open invoice (first visit after a cancel / expiry): make a fresh one
-    const { paymentUrl } = await orderService.startPayment(order.orderId, order.telegramId, gateway || order.paymentGateway || "zinipay");
+    if (order.paymentGateway && order.paymentGateway !== gateway) {
+      // Already paying with the other method: back to the page, which offers "Continue"
+      return res.send(renderCheckoutPage(order));
+    }
+    // No open invoice (first time, or after a cancel / expiry): make a fresh one
+    const { paymentUrl } = await orderService.startPayment(order.orderId, order.telegramId, gateway);
     return res.redirect(302, paymentUrl);
   } catch (err) {
     console.error(`[Pay link] ${orderId}:`, err.message);
     return page({ status: 502, title: "Payment unavailable", statusText: "Could not open the payment page", subText: err.message.replace(/^Payment link could not be created: /, "") + " — please try again in a moment.", isSuccess: false });
   }
 });
+
+const escHtml = (s) =>
+  String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+/** Checkout page: order summary + one button per payment method. */
+function renderCheckoutPage(order) {
+  const { GATEWAYS, availableGateways, chargeFor, payLink } = orderService;
+  const fmt = (c) => (c.currency === "USD" ? `$${Number(c.amount).toFixed(2)}` : `${Number(c.amount).toLocaleString("en-US", { maximumFractionDigits: 2 })} ৳`);
+  const hints = { zinipay: "bKash · Nagad · Rocket", cryptomus: "USDT · BTC · ETH · TRX and more", sslcommerz: "Card · Mobile banking" };
+
+  // Locked to a method already started: only "Continue" (one order can't be paid twice)
+  const ids = order.paymentGateway ? [order.paymentGateway] : availableGateways();
+  const methods = ids
+    .map((id) => ({ id, ...GATEWAYS[id], charge: chargeFor(order, id) }))
+    .filter((m) => m.charge.amount > 0);
+
+  const buttons = methods
+    .map(
+      (m) => `<a class="method" href="${escHtml(payLink(order.orderId, m.id))}">
+        <span><b>${escHtml(order.paymentGateway ? `Continue · ${m.label}` : m.label)}</b><small>${escHtml(hints[m.id] || "")}</small></span>
+        <span class="amt">${escHtml(fmt(m.charge))}</span></a>`,
+    )
+    .join("");
+  const fee = order.serviceFeePercent > 0 ? `<div class="fee">Includes ${escHtml(order.serviceFeePercent)}% service fee</div>` : "";
+  const lockedNote = order.paymentGateway
+    ? `<p class="note">You already started paying with ${escHtml(GATEWAYS[order.paymentGateway]?.label || order.paymentGateway)}. To use another method, cancel this order in the bot and order again.</p>`
+    : "";
+
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pay · ${escHtml(order.orderId)}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { background: #0f172a; color: #f8fafc; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 16px; max-width: 440px; width: 100%; padding: 26px 22px; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { color: #94a3b8; font-size: 13px; margin-bottom: 18px; }
+  .item { background: #0f172a; border: 1px solid #334155; border-radius: 12px; padding: 12px 14px; margin-bottom: 18px; font-size: 14px; line-height: 1.6; }
+  .item b { color: #fff; }
+  .q { font-size: 13px; color: #cbd5e1; margin-bottom: 10px; font-weight: 600; }
+  .method { display: flex; justify-content: space-between; align-items: center; gap: 12px; text-decoration: none; color: #fff;
+            background: #2563eb; border-radius: 12px; padding: 14px 16px; margin-bottom: 10px; }
+  .method:nth-of-type(2) { background: #059669; }
+  .method small { display: block; font-size: 12px; color: rgba(255,255,255,.8); font-weight: 400; margin-top: 2px; }
+  .amt { font-weight: 800; font-size: 16px; white-space: nowrap; }
+  .fee { color: #94a3b8; font-size: 12px; text-align: center; margin-top: 4px; }
+  .note { color: #fbbf24; font-size: 13px; margin-top: 12px; line-height: 1.5; }
+  .foot { color: #64748b; font-size: 12px; text-align: center; margin-top: 18px; line-height: 1.5; }
+</style></head>
+<body><div class="card">
+  <h1>Choose how to pay</h1>
+  <div class="sub">Order <b>${escHtml(order.orderId)}</b></div>
+  <div class="item"><b>${escHtml(order.productName)}</b><br>${escHtml(order.variationName)}${order.quantity > 1 ? ` × ${escHtml(order.quantity)}` : ""}</div>
+  <div class="q">Pay with</div>
+  ${buttons || `<p class="note">No payment method is available right now. Please contact support.</p>`}
+  ${fee}${lockedNote}
+  <div class="foot">🔒 Secure checkout. Your proxy arrives in your Telegram chat as soon as the payment is confirmed.</div>
+</div></body></html>`;
+}
 
 // Helper to render return page
 function renderReturnPage({ title, statusText, subText, isSuccess, orderId }) {

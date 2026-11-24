@@ -380,7 +380,15 @@ function registerCustomerHandlers(bot) {
     }
   });
 
-  /** Checkout screen once a payment method is chosen (or the only one) */
+  /** "1416.45 ৳ / $10.5" for the methods on offer */
+  function orderTotals(order, methods) {
+    const parts = [];
+    if (methods.some((m) => m.currency === "BDT")) parts.push(`${order.amount} ৳`);
+    if (methods.some((m) => m.currency === "USD") && order.amountUsd > 0) parts.push(`$${order.amountUsd}`);
+    return parts.join(" / ");
+  }
+
+  /** Checkout screen once a payment method is chosen (buttons from older messages) */
   async function showPaymentLink(ctx, order, gateway) {
     const { amount, currency } = await startPayment(order.orderId, ctx.from.id, gateway);
     // The button opens the bot's /pay link, which re-creates the invoice if the customer cancels and comes back
@@ -420,11 +428,12 @@ function registerCustomerHandlers(bot) {
         .map((id) => ({ id, ...GATEWAYS[id] }))
         .filter((m) => (m.currency === "USD" ? order.amountUsd > 0 : order.amount > 0));
       if (!methods.length) throw new Error("No payment method is configured (ZiniPay / Cryptomus / SSLCommerz)");
-      if (methods.length === 1) return await showPaymentLink(ctx, order, methods[0].id);
+      // One "Pay Now" button: the checkout page asks bKash/Nagad or crypto
+      const totals = orderTotals(order, methods);
       return await animator.edit(
         ctx,
-        strings.choosePayment(order.productName, order.variationName, order.orderId, order.quantity, order.serviceFeePercent),
-        keyboards.paymentMethodsKeyboard(order, methods),
+        strings.checkoutReady(order.productName, order.variationName, order.orderId, order.quantity, totals, order.serviceFeePercent),
+        keyboards.checkoutKeyboard(payLink(order.orderId), order.orderId, totals),
       );
     } catch (err) {
       if (err instanceof OrderError) {

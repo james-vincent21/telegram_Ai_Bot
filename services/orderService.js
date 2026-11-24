@@ -41,9 +41,10 @@ function payToken(orderId) {
  * Each visit re-checks the invoice and, if the customer cancelled or it
  * expired, makes a fresh one, so the same button always works.
  */
-function payLink(orderId, gateway) {
+function payLink(orderId, gateway = "") {
   const base = (process.env.APP_BASE_URL || "http://localhost:5001").replace(/\/$/, "");
-  return `${base}/pay/${encodeURIComponent(orderId)}?m=${encodeURIComponent(gateway)}&t=${payToken(orderId)}`;
+  const m = gateway ? `m=${encodeURIComponent(gateway)}&` : "";
+  return `${base}/pay/${encodeURIComponent(orderId)}?${m}t=${payToken(orderId)}`;
 }
 
 /** Amount + currency an order is charged in with a given gateway. */

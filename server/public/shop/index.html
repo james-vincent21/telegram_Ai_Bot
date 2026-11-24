@@ -376,8 +376,10 @@
     try {
       const r = await api("/orders", { method: "POST", body: JSON.stringify({ productId: state.product.id, variationId: state.pkg.id || null, locationId: needsLoc() ? state.loc.id : null, quantity: state.qty }) });
       haptic.ok();
-      state.placed = r; state.orders = null;
+      state.placed = { ...r, paymentUrl: r.checkoutUrl }; state.orders = null;
       go("placed");
+      // Straight to the checkout page: it asks bKash / Nagad or crypto
+      setTimeout(() => openPay(r.checkoutUrl), 500);
     } catch (e) { haptic.err(); toast(e.message); }
     finally { state.busy = false; if (state.screen === "product") renderProduct(); }
   }
@@ -405,7 +407,7 @@
       ? `<div class="row"><button class="btn pay" id="pay">💳 Pay now</button></div>`
       : methods.map((m) => `<div class="row"><button class="btn pay" data-method="${esc(m.id)}" ${state.busy ? "disabled" : ""}>${esc(m.label)} · ${priceIn(m.amount, m.currency)}</button></div>`).join("");
     view.innerHTML = `<div class="success"><div class="ring">✓</div><h2>Order ${esc(r.orderId)}</h2>
-      <p>${r.paymentUrl ? "Finish the payment on the secure checkout page." : state.busy ? "Opening the checkout…" : "Choose how you want to pay:"}<br>Your proxy will arrive in the chat right after payment.</p>
+      <p>${r.paymentUrl ? "The payment page asks how you want to pay (bKash / Nagad or crypto)." : state.busy ? "Opening the checkout…" : "Choose how you want to pay:"}<br>Your proxy will arrive in the chat right after payment.</p>
       ${buttons}
       <div class="row"><button class="btn" id="more">🛍 Keep shopping</button><button class="btn" id="mine">🧾 My orders</button></div></div>`;
     bar.innerHTML = "";
