@@ -9,7 +9,22 @@ const router = express.Router();
 
 const Order = require("../../models/Order");
 const catalog = require("../../services/ipdokan");
-const { createTelegramOrder, OrderError, MAX_QUANTITY } = require("../../services/orderService");
+const {
+  createTelegramOrder,
+  startPayment,
+  availableGateways,
+  GATEWAYS,
+  OrderError,
+  MAX_QUANTITY,
+} = require("../../services/orderService");
+
+/** Payment methods this order can use: [{id, label, amount, currency}] */
+function methodsFor(order) {
+  return availableGateways()
+    .map((id) => ({ id, label: GATEWAYS[id].label, currency: GATEWAYS[id].currency }))
+    .map((m) => ({ ...m, amount: m.currency === "USD" ? order.amountUsd : order.amount }))
+    .filter((m) => m.amount > 0);
+}
 const strings = require("../../bot/config/strings");
 const keyboards = require("../../bot/keyboards");
 const { bot } = require("../../bot/index");
@@ -120,7 +135,7 @@ router.get("/products/:id", async (req, res) => {
   }
 });
 
-// Place an order → returns the payment link
+// Place an order → returns the payment methods to choose from
 router.post("/orders", async (req, res) => {
   const { productId, variationId, quantity, locationId } = req.body || {};
   if (!/^[a-f0-9]{1,24}$/i.test(String(productId))) return res.status(400).json({ error: "Invalid product" });
@@ -128,7 +143,7 @@ router.post("/orders", async (req, res) => {
     return res.status(400).json({ error: "Invalid location" });
   }
   try {
-    const { order, total, paymentUrl } = await createTelegramOrder({
+    const { order, total } = await createTelegramOrder({
       from: req.tgUser,
       productId: String(productId),
       variationId: variationId ? String(variationId) : null,
@@ -137,20 +152,36 @@ router.post("/orders", async (req, res) => {
       source: "shop",
     });
 
-    // Also drop the order + pay button into the chat, so it's never lost
+    const methods = methodsFor(order);
+
+    // Also drop the order + payment buttons into the chat, so it's never lost
     bot.telegram
       .sendMessage(
         req.tgUser.id,
-        strings.orderSummary(order.productName, order.variationName, total, "BDT", order.orderId, order.quantity).replace(/%%STEPS:\d%%\n?/, ""),
-        { parse_mode: "HTML", ...keyboards.orderPaymentKeyboard(paymentUrl, order.orderId, total, "BDT") },
+        strings.choosePayment(order.productName, order.variationName, order.orderId, order.quantity).replace(/%%STEPS:\d%%\n?/, ""),
+        { parse_mode: "HTML", ...keyboards.paymentMethodsKeyboard(order, methods) },
       )
       .catch(() => {});
 
-    return res.json({ orderId: order.orderId, total, currency: "BDT", paymentUrl });
+    return res.json({ orderId: order.orderId, total, currency: "BDT", totalUsd: order.amountUsd, methods });
   } catch (err) {
     if (err instanceof OrderError) return res.status(409).json({ error: err.message });
     console.error("[Shop] order:", err.message);
     return res.status(502).json({ error: "Could not create the order. Nothing was charged." });
+  }
+});
+
+// Start payment for one of the user's orders with a method → returns the checkout link
+router.post("/orders/:orderId/pay", async (req, res) => {
+  const method = String(req.body?.method || "");
+  if (!GATEWAYS[method]) return res.status(400).json({ error: "Invalid payment method" });
+  try {
+    const { paymentUrl, amount, currency } = await startPayment(req.params.orderId, req.tgUser.id, method);
+    return res.json({ paymentUrl, amount, currency });
+  } catch (err) {
+    if (err instanceof OrderError) return res.status(409).json({ error: err.message });
+    console.error("[Shop] pay:", err.message);
+    return res.status(502).json({ error: "Could not start the payment. Nothing was charged." });
   }
 });
 
@@ -160,7 +191,7 @@ router.get("/orders", async (req, res) => {
     const orders = await Order.find({ telegramId: req.tgUser.id })
       .sort({ createdAt: -1 })
       .limit(20)
-      .select("orderId productName variationName locationName quantity amount currency status createdAt expiresAt deliveredCredentials gatewayRedirectUrl");
+      .select("orderId paymentGateway amountUsd productName variationName locationName quantity amount currency status createdAt expiresAt deliveredCredentials gatewayRedirectUrl");
     return res.json({ orders });
   } catch (err) {
     return res.status(500).json({ error: err.message });

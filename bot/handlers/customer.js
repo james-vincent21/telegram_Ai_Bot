@@ -10,6 +10,9 @@ const {
   maxQuantity,
   packageLabel,
   createTelegramOrder,
+  startPayment,
+  availableGateways,
+  GATEWAYS,
   OrderError,
 } = require("../../services/orderService");
 
@@ -373,26 +376,49 @@ function registerCustomerHandlers(bot) {
     }
   });
 
-  // Confirm: buy_<productId>_<variationId>_<qty>[_<categoryId>[_<locationId>]] -> create order + payment link
+  /** Checkout screen once a payment method is chosen (or the only one) */
+  async function showPaymentLink(ctx, order, gateway) {
+    const { paymentUrl, amount, currency } = await startPayment(order.orderId, ctx.from.id, gateway);
+    return animator.edit(
+      ctx,
+      strings.orderSummary(
+        order.productName,
+        order.variationName,
+        amount,
+        currency,
+        order.orderId,
+        order.quantity,
+        GATEWAYS[gateway]?.label || "",
+      ),
+      keyboards.orderPaymentKeyboard(paymentUrl, order.orderId, amount, currency),
+    );
+  }
+
+  // Confirm: buy_<productId>_<variationId>_<qty>[_<categoryId>[_<locationId>]] -> create order -> choose payment
   bot.action(/^buy_([a-f0-9]+)_([a-f0-9]+)_(\d+)(?:_([a-f0-9]+))?(?:_([A-Za-z0-9-]+))?$/, async (ctx) => {
-    await ctx.answerCbQuery("Generating payment link...");
+    await ctx.answerCbQuery("Creating your order...");
     const productId = ctx.match[1];
     const variationId = ctx.match[2] === "0" ? null : ctx.match[2];
     const locationId = ctx.match[5] && ctx.match[5] !== "0" ? ctx.match[5] : null;
     const back = backFrom(productId, ctx.match[2], ctx.match[4] || "0", ctx.match[5] || "0");
 
     try {
-      const { order, total, paymentUrl } = await createTelegramOrder({
+      const { order } = await createTelegramOrder({
         from: ctx.from,
         productId,
         variationId,
         quantity: ctx.match[3],
         locationId,
       });
+      const methods = availableGateways()
+        .map((id) => ({ id, ...GATEWAYS[id] }))
+        .filter((m) => (m.currency === "USD" ? order.amountUsd > 0 : order.amount > 0));
+      if (!methods.length) throw new Error("No payment method is configured (ZiniPay / Cryptomus / SSLCommerz)");
+      if (methods.length === 1) return await showPaymentLink(ctx, order, methods[0].id);
       return await animator.edit(
         ctx,
-        strings.orderSummary(order.productName, order.variationName, total, "BDT", order.orderId, order.quantity),
-        keyboards.orderPaymentKeyboard(paymentUrl, order.orderId, total, "BDT"),
+        strings.choosePayment(order.productName, order.variationName, order.orderId, order.quantity),
+        keyboards.paymentMethodsKeyboard(order, methods),
       );
     } catch (err) {
       if (err instanceof OrderError) {
@@ -405,6 +431,27 @@ function registerCustomerHandlers(bot) {
         return ctx.editMessageText(text, { parse_mode: "HTML", ...keyboards.navKeyboard(back) });
       }
       console.error("[OrderCreation Error]:", err.message);
+      return ctx.editMessageText(strings.orderCreateError, {
+        parse_mode: "HTML",
+        ...keyboards.retryKeyboard(ctx.match[0]),
+      });
+    }
+  });
+
+  // Payment method chosen: pay_<gateway>_<orderId> -> invoice + Pay button
+  bot.action(/^pay_(zinipay|cryptomus|sslcommerz)_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery("Generating payment link...");
+    const [, gateway, orderId] = ctx.match;
+    try {
+      const order = await Order.findOne({ orderId, telegramId: ctx.from.id });
+      if (!order) throw new OrderError("not_found", "This order could not be found.");
+      return await showPaymentLink(ctx, order, gateway);
+    } catch (err) {
+      if (/message is not modified/i.test(err.message)) return;
+      if (err instanceof OrderError) {
+        return ctx.editMessageText(`😕 <b>${err.message}</b>`, { parse_mode: "HTML", ...keyboards.navKeyboard() });
+      }
+      console.error("[Payment Error]:", err.message);
       return ctx.editMessageText(strings.orderCreateError, {
         parse_mode: "HTML",
         ...keyboards.retryKeyboard(ctx.match[0]),

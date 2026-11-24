@@ -179,6 +179,26 @@ function quantityKeyboard(productId, variationId, quantity, max, totalLabel, cat
   ]);
 }
 
+/**
+ * Payment method picker for a new order.
+ * @param {{orderId, amount, amountUsd}} order
+ * @param {Array<{id: string, label: string, currency: string}>} methods
+ */
+function paymentMethodsKeyboard(order, methods) {
+  const rows = methods
+    .filter((m) => (m.currency === "USD" ? order.amountUsd > 0 : order.amount > 0))
+    .map((m) => [
+      cb(
+        `${m.label} · ${m.currency === "USD" ? `$${order.amountUsd}` : `${order.amount} ৳`}`,
+        `pay_${m.id}_${order.orderId}`,
+        GREEN,
+      ),
+    ]);
+  rows.push([cb(strings.cancelButtonText, `cancel_order_${order.orderId}`, RED)]);
+  rows.push([cb("🏠 Home", "go_home", GREEN)]);
+  return Markup.inlineKeyboard(rows);
+}
+
 /** Checkout: pay (green) / cancel (red) */
 function orderPaymentKeyboard(checkoutUrl, orderId, amount, currency) {
   return Markup.inlineKeyboard([
@@ -321,6 +341,7 @@ module.exports = {
   locationsKeyboard,
   quantityKeyboard,
   orderPaymentKeyboard,
+  paymentMethodsKeyboard,
   userOrdersKeyboard,
   afterDeliveryKeyboard,
   retryKeyboard,

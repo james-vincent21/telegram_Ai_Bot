@@ -7,6 +7,7 @@ const Plan = require("../../models/Plan");
 const User = require("../../models/User");
 const paymentService = require("../../services/payment");
 const zinipay = require("../../services/zinipay");
+const cryptomus = require("../../services/cryptomus");
 const stockService = require("../../services/stockService");
 const notifyAdminService = require("../../services/notifyAdmin");
 const strings = require("../../bot/config/strings");
@@ -262,13 +263,15 @@ router.post("/webhook/woocommerce", async (req, res) => {
  * order is claimed atomically, so it is delivered only once.
  *
  * @param {Object} order - Order document
- * @param {{amount?: number, raw?: Object, source: string}} payment - verified gateway data
+ * @param {{amount?: number, expected?: number, raw?: Object, source: string}} payment - verified
+ *   gateway data; `expected` is the amount due in the gateway's currency (default: order.amount)
  * @returns {Promise<"DELIVERED"|"STOCK_PENDING"|"ALREADY_PROCESSED"|"AMOUNT_MISMATCH">}
  */
-async function fulfillPaidOrder(order, { amount, raw, source }) {
+async function fulfillPaidOrder(order, { amount, expected, raw, source }) {
+  const due = Number(expected ?? order.amount);
   // The gateway must have collected the full order amount
-  if (amount != null && !Number.isNaN(amount) && amount + 0.01 < Number(order.amount)) {
-    console.error(`❌ [${source}] Amount mismatch for ${order.orderId}: paid ${amount}, expected ${order.amount}`);
+  if (amount != null && !Number.isNaN(amount) && amount + 0.01 < due) {
+    console.error(`❌ [${source}] Amount mismatch for ${order.orderId}: paid ${amount}, expected ${due}`);
     await Order.updateOne(
       { _id: order._id, status: "pending" },
       { $set: { status: "failed", gatewayResponse: raw || null } },
@@ -282,7 +285,13 @@ async function fulfillPaidOrder(order, { amount, raw, source }) {
     { $set: { status: "paid", gatewayResponse: raw || null } },
     { new: true },
   );
-  if (!claimed) return "ALREADY_PROCESSED";
+  if (!claimed) {
+    const current = await Order.findById(order._id).lean();
+    if (current?.status === "cancelled") {
+      console.error(`⚠️ [${source}] Payment received for CANCELLED order ${order.orderId} — refund or deliver manually.`);
+    }
+    return "ALREADY_PROCESSED";
+  }
   order = claimed;
 
   const [brand, plan] = await Promise.all([Brand.findById(order.brandId), Plan.findById(order.planId)]);
@@ -378,6 +387,60 @@ router.all("/webhook/zinipay", async (req, res) => {
 });
 
 /**
+ * Asks Cryptomus whether an order's invoice is paid and fulfils it if so.
+ * The amount is checked in USD (what Cryptomus charged).
+ */
+async function checkCryptomusOrder(order) {
+  if (!order?.gatewayTransactionId || order.paymentGateway !== "cryptomus") return "NOT_CRYPTOMUS";
+  const inv = await cryptomus.getInvoice(order.gatewayTransactionId);
+  if (inv.paid) {
+    if (inv.orderId !== order.gatewayTransactionId || inv.currency !== "USD") {
+      console.error(`❌ [Cryptomus] Invoice mismatch for ${order.orderId}: ${inv.orderId} ${inv.amount} ${inv.currency}`);
+      return "MISMATCH";
+    }
+    return fulfillPaidOrder(order, { amount: inv.amount, expected: order.amountUsd, raw: inv.raw, source: "Cryptomus" });
+  }
+  if (inv.failed) {
+    await Order.updateOne(
+      { _id: order._id, status: "pending" },
+      { $set: { status: "failed", gatewayResponse: inv.raw } },
+    );
+  }
+  return inv.status || "UNKNOWN";
+}
+
+/** Checks any pending order with whichever gateway it was paid through. */
+async function checkOrderPayment(order) {
+  if (order.paymentGateway === "zinipay") return checkZiniPayOrder(order);
+  if (order.paymentGateway === "cryptomus") return checkCryptomusOrder(order);
+  return "SKIPPED";
+}
+
+/**
+ * Cryptomus webhook: POSTed on every invoice status change.
+ * The signature is checked, but the status is always re-read from Cryptomus.
+ */
+router.post("/webhook/cryptomus", async (req, res) => {
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const cryptomusId = typeof body.order_id === "string" ? body.order_id : "";
+  if (!cryptomus.webhookSignatureValid(body)) {
+    console.warn(`⚠️ [Cryptomus Webhook] Bad signature for order_id=${cryptomusId} from ${req.ip}`);
+  }
+  console.log(`🔔 [Cryptomus Webhook] order_id=${cryptomusId} status=${body.status}`);
+  try {
+    const order = cryptomusId
+      ? await Order.findOne({ gatewayTransactionId: cryptomusId, paymentGateway: "cryptomus" })
+      : null;
+    if (!order) return res.status(404).json({ status: "FAILED", message: "Order not found" });
+    const status = await checkCryptomusOrder(order);
+    return res.status(200).json({ status, orderId: order.orderId });
+  } catch (err) {
+    console.error("❌ [Cryptomus Webhook] Error:", err.message);
+    return res.status(500).json({ status: "ERROR" });
+  }
+});
+
+/**
  * SSLCommerz IPN (Instant Payment Notification) Webhook
  * Handles server-to-server payment confirmation and instant fulfillment.
  */
@@ -462,10 +525,10 @@ function renderReturnPage({ title, statusText, subText, isSuccess, orderId }) {
 // Payment Redirection Routes
 router.all("/payment/success", async (req, res) => {
   const orderId = req.query.order_id || req.body?.value_a || "";
-  // ZiniPay: confirm with the gateway now instead of waiting for the webhook
+  // ZiniPay / Cryptomus: confirm with the gateway now instead of waiting for the webhook
   if (orderId) {
-    const order = await Order.findOne({ orderId: String(orderId), paymentGateway: "zinipay", status: "pending" }).catch(() => null);
-    if (order) await checkZiniPayOrder(order).catch((e) => console.error("[ZiniPay success check]", e.message));
+    const order = await Order.findOne({ orderId: String(orderId), status: "pending" }).catch(() => null);
+    if (order) await checkOrderPayment(order).catch((e) => console.error("[Success check]", e.message));
   }
   res.send(
     renderReturnPage({
@@ -510,3 +573,5 @@ router.all("/payment/cancel", (req, res) => {
 module.exports = router;
 module.exports.fulfillPaidOrder = fulfillPaidOrder;
 module.exports.checkZiniPayOrder = checkZiniPayOrder;
+module.exports.checkCryptomusOrder = checkCryptomusOrder;
+module.exports.checkOrderPayment = checkOrderPayment;

@@ -65,6 +65,9 @@ const orderSchema = new mongoose.Schema(
       default: 1,
       min: 1,
     },
+    // USD prices from ipdokan.com, charged by Cryptomus
+    unitPriceUsd: { type: Number, default: null },
+    amountUsd: { type: Number, default: null },
     unitPrice: {
       type: Number,
       default: null,
@@ -83,7 +86,7 @@ const orderSchema = new mongoose.Schema(
       required: false,
       sparse: true,
     },
-    // "zinipay" | "sslcommerz" (empty for old WooCommerce orders)
+    // "zinipay" | "cryptomus" | "sslcommerz"; empty until the customer picks a method
     paymentGateway: { type: String, default: "", index: true },
     gatewayRedirectUrl: {
       type: String,

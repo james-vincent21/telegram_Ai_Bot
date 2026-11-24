@@ -155,7 +155,17 @@ module.exports = {
     `💰 <b>Total: ${formatMoney(unitPrice * quantity)} ${currency}</b></blockquote>\n\n` +
     `<i>Use ➖ / ➕ or a preset, then tap Confirm.</i>`,
 
-  orderSummary: (brandName, planLabel, price, currency, orderId, quantity = 1) =>
+  choosePayment: (brandName, planLabel, orderId, quantity = 1) =>
+    `💳 <b>CHOOSE HOW TO PAY</b>\n<i>Your order is ready</i>\n\n${steps(5)}\n${LINE}\n\n` +
+    `<blockquote>🏷 <b>Provider:</b> ${brandName}\n` +
+    `📦 <b>Package:</b> ${planLabel}` +
+    `${quantity > 1 ? `\n🔢 <b>Quantity:</b> ${quantity}` : ""}\n` +
+    `🆔 <b>Order ID:</b> <code>${orderId}</code></blockquote>\n\n` +
+    `Pick a payment method:\n` +
+    `💳 <b>bKash / Nagad</b> — pay in Taka\n` +
+    `🪙 <b>Crypto</b> — pay in USD with USDT, BTC and more\n\n` +
+    `⚡ Your proxy will appear in this chat as soon as payment is confirmed.`,
+  orderSummary: (brandName, planLabel, price, currency, orderId, quantity = 1, methodLabel = "") =>
     `💳 <b>COMPLETE PAYMENT</b>\n<i>Your order is ready</i>\n\n${steps(5)}\n${LINE}\n\n` +
     `<blockquote>🏷 <b>Provider:</b> ${brandName}\n` +
     `📦 <b>Package:</b> ${planLabel}` +
@@ -163,9 +173,9 @@ module.exports = {
     `🆔 <b>Order ID:</b> <code>${orderId}</code></blockquote>\n\n` +
     `💰 <b>Total to pay:</b> <b>${price} ${currency}</b>\n${THIN}\n` +
     `💳 Tap <b>Pay Securely</b> below to open the secure checkout page.\n` +
-    `<i>bKash · Nagad · Rocket</i>\n\n` +
+    `${methodLabel ? `<i>${methodLabel}</i>\n` : ""}\n` +
     `⚡ Your proxy will appear in this chat as soon as payment is confirmed.`,
-  payButtonText: (amount, currency) => `💳 Pay Securely · ${amount} ${currency}`,
+  payButtonText: (amount, currency) => `💳 Pay Securely · ${currency === "USD" ? `$${amount}` : `${amount} ${currency}`}`,
   cancelButtonText: "✖️ Cancel Order",
   orderCancelled:
     `🚫 <b>Order cancelled</b>\n\nNothing was charged. Tap <b>⚡ Buy Proxy</b> whenever you want to start a new order.`,

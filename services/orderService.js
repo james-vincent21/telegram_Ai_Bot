@@ -1,21 +1,40 @@
 /**
  * Shared order logic for the Telegram bot and the Mini App shop.
  *
- * Products come from ipdokan.com. Payment is taken with ZiniPay (or
- * SSLCommerz); once the gateway confirms payment (server/routes/webhook.js),
- * credentials are claimed from Stock and sent to the customer's Telegram chat.
+ * Products come from ipdokan.com. An order is created first; the customer then
+ * picks a payment method (startPayment). Once the gateway confirms payment
+ * (server/routes/webhook.js), credentials are claimed from Stock and sent to
+ * the customer's Telegram chat.
  */
 const crypto = require("crypto");
 const Order = require("../models/Order");
 const catalog = require("./ipdokan");
 const paymentService = require("./payment");
 const zinipay = require("./zinipay");
+const cryptomus = require("./cryptomus");
 
-/** ZiniPay when its key is set (or PAYMENT_GATEWAY=zinipay), else SSLCommerz. */
-function activeGateway() {
-  const forced = (process.env.PAYMENT_GATEWAY || "").trim().toLowerCase();
-  if (forced === "zinipay" || forced === "sslcommerz") return forced;
-  return zinipay.isConfigured() ? "zinipay" : "sslcommerz";
+/** Payment methods shown to customers, in display order. */
+const GATEWAYS = {
+  zinipay: { label: "💳 bKash / Nagad", currency: "BDT", configured: () => zinipay.isConfigured() },
+  cryptomus: { label: "🪙 Crypto (USDT)", currency: "USD", configured: () => cryptomus.isConfigured() },
+  sslcommerz: {
+    label: "💳 Card / Mobile banking",
+    currency: "BDT",
+    // Fallback only when ZiniPay isn't set up
+    configured: () => !zinipay.isConfigured() && Boolean(process.env.GATEWAY_STORE_ID && process.env.GATEWAY_STORE_PASSWORD),
+  },
+};
+
+/** Configured payment methods, e.g. ["zinipay", "cryptomus"]. */
+function availableGateways() {
+  return Object.keys(GATEWAYS).filter((g) => GATEWAYS[g].configured());
+}
+
+/** Amount + currency an order is charged in with a given gateway. */
+function chargeFor(order, gateway) {
+  return GATEWAYS[gateway]?.currency === "USD"
+    ? { amount: order.amountUsd, currency: "USD" }
+    : { amount: order.amount, currency: order.currency || "BDT" };
 }
 
 const MAX_QUANTITY = 50;
@@ -32,6 +51,7 @@ async function resolveItem(productId, variationId, prefetched = {}) {
       variation: null,
       name: "Standard",
       price: parseFloat(product.price) || 0,
+      priceUsd: product.priceUsd != null ? Number(product.priceUsd) : null,
       inStock: product.stock_status === "instock",
       stockQuantity: product.stock_quantity ?? null,
       chooseLocation: false,
@@ -44,6 +64,7 @@ async function resolveItem(productId, variationId, prefetched = {}) {
     variation,
     name: variation.name,
     price: parseFloat(variation.price) || 0,
+    priceUsd: variation.priceUsd != null ? Number(variation.priceUsd) : null,
     inStock: variation.inStock,
     stockQuantity: variation.stockQuantity ?? null,
     chooseLocation: variation.chooseLocation,
@@ -68,7 +89,7 @@ function newOrderId() {
 class OrderError extends Error {
   constructor(code, message) {
     super(message);
-    this.code = code; // "not_found" | "out_of_stock" | "location_required"
+    this.code = code; // "not_found" | "out_of_stock" | "location_required" | "gateway" | "not_pending"
   }
 }
 
@@ -88,9 +109,9 @@ async function resolveLocation(item, locationId) {
 }
 
 /**
- * Creates the local Order and its payment link for a Telegram user.
+ * Creates the local Order (unpaid, no payment method yet) for a Telegram user.
  * @param {{id:number, username?:string, first_name?:string}} from - Telegram user
- * @returns {Promise<{order, item, location, total:number, paymentUrl:string}>}
+ * @returns {Promise<{order, item, location, total:number}>}
  */
 async function createTelegramOrder({ from, productId, variationId, quantity, locationId, source = "bot" }) {
   const vid = variationId && String(variationId) !== "0" ? String(variationId) : null;
@@ -103,8 +124,8 @@ async function createTelegramOrder({ from, productId, variationId, quantity, loc
   const { product, variation } = item;
   const orderId = newOrderId();
   const total = Math.round(item.price * qty * 100) / 100;
+  const totalUsd = item.priceUsd > 0 ? Math.round(item.priceUsd * qty * 100) / 100 : null;
   const { brand, plan } = await catalog.ensureBrandPlan(product.id, variation?.id);
-  const gateway = activeGateway();
 
   const order = await Order.create({
     orderId,
@@ -123,44 +144,91 @@ async function createTelegramOrder({ from, productId, variationId, quantity, loc
     quantity: qty,
     unitPrice: item.price,
     amount: total,
+    unitPriceUsd: item.priceUsd,
+    amountUsd: totalUsd,
     currency: "BDT",
-    paymentGateway: gateway,
-    // SSLCommerz: our tran_id. ZiniPay: replaced by its invoice id below.
-    gatewayTransactionId: `${orderId}-${crypto.randomBytes(4).toString("hex")}`,
     status: "pending",
   });
+  console.log(`[Order ${source}] Created ${orderId}: ${product.name} / ${order.variationName} ×${qty} = ${total} BDT`);
 
-  const customer = { name: from.first_name || from.username || `User ${from.id}` };
+  return { order, item, location, total };
+}
+
+/**
+ * Starts (or resumes) payment for a pending order with the chosen gateway and
+ * returns its checkout link. An order is locked to the first gateway it is
+ * started with, so the customer can never pay the same order twice.
+ * @returns {Promise<{order, paymentUrl: string, amount: number, currency: string}>}
+ */
+async function startPayment(orderId, telegramId, gateway) {
+  if (!GATEWAYS[gateway] || !GATEWAYS[gateway].configured()) {
+    throw new OrderError("gateway", "This payment method is not available.");
+  }
+  let order = await Order.findOne({ orderId: String(orderId), telegramId });
+  if (!order) throw new OrderError("not_found", "This order could not be found.");
+  if (order.status !== "pending") throw new OrderError("not_pending", "This order is no longer waiting for payment.");
+
+  if (order.paymentGateway && order.paymentGateway !== gateway) {
+    throw new OrderError(
+      "gateway",
+      `Payment for this order was already started with ${GATEWAYS[order.paymentGateway]?.label || order.paymentGateway}. Use that link, or cancel and order again.`,
+    );
+  }
+  const charge = chargeFor(order, gateway);
+  if (!(charge.amount > 0)) throw new OrderError("gateway", "This product has no price for this payment method.");
+  if (order.paymentGateway === gateway && order.gatewayRedirectUrl) {
+    return { order, paymentUrl: order.gatewayRedirectUrl, ...charge };
+  }
+
+  // Lock the gateway first (atomically) so two taps can't create two invoices
+  order = await Order.findOneAndUpdate(
+    { _id: order._id, status: "pending", paymentGateway: { $in: ["", null] } },
+    {
+      $set: {
+        paymentGateway: gateway,
+        // SSLCommerz uses this as tran_id; ZiniPay / Cryptomus replace it below
+        gatewayTransactionId: `${order.orderId}-${crypto.randomBytes(4).toString("hex")}`,
+      },
+    },
+    { new: true },
+  );
+  if (!order) return startPayment(orderId, telegramId, gateway); // another tap won the race
+
+  const customer = { name: order.telegramFirstName || order.telegramUsername || `User ${order.telegramId}` };
   let session;
   try {
-    session =
-      gateway === "zinipay"
-        ? await zinipay.createInvoice(order, customer)
-        : await paymentService.createPaymentSession(order, customer);
+    if (gateway === "zinipay") session = await zinipay.createInvoice(order, customer);
+    else if (gateway === "cryptomus") session = await cryptomus.createInvoice(order);
+    else session = await paymentService.createPaymentSession(order, customer);
   } catch (err) {
     session = { success: false, error: err.message };
   }
   if (!session.success || !session.redirectUrl) {
-    order.status = "failed";
-    order.gatewayResponse = session.raw || { error: session.error };
-    await order.save();
-    console.error(`[Order ${source}] Payment session failed for ${orderId}:`, session.error);
+    // Unlock so the customer can retry or pick another method
+    await Order.updateOne(
+      { _id: order._id, status: "pending" },
+      { $set: { paymentGateway: "", gatewayResponse: session.raw || { error: session.error } } },
+    );
+    console.error(`[Payment] ${gateway} invoice failed for ${order.orderId}:`, session.error);
     throw new Error(`Payment link could not be created: ${session.error}`);
   }
 
   order.gatewayRedirectUrl = session.redirectUrl;
-  if (gateway === "zinipay" && session.invoiceId) order.gatewayTransactionId = session.invoiceId;
+  if (session.invoiceId && gateway !== "sslcommerz") order.gatewayTransactionId = session.invoiceId;
   await order.save();
-
-  return { order, item, location, total, paymentUrl: session.redirectUrl };
+  console.log(`[Payment] ${gateway} invoice for ${order.orderId}: ${charge.amount} ${charge.currency}`);
+  return { order, paymentUrl: session.redirectUrl, ...charge };
 }
 
 module.exports = {
   MAX_QUANTITY,
+  GATEWAYS,
   resolveItem,
   maxQuantity,
   packageLabel,
+  availableGateways,
+  chargeFor,
   createTelegramOrder,
-  activeGateway,
+  startPayment,
   OrderError,
 };

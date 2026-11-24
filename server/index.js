@@ -76,28 +76,33 @@ function syncCatalog() {
 setTimeout(syncCatalog, 5000);
 setInterval(syncCatalog, SYNC_EVERY_MS).unref();
 
-// ZiniPay safety net: its webhook can be missed, so also ask ZiniPay about
-// recent unpaid orders every minute (verify API; delivery happens only once).
+// Payment safety net: webhooks can be missed, so also ask ZiniPay / Cryptomus
+// about recent unpaid orders every minute (delivery happens only once).
 const Order = require('../models/Order');
-const { checkZiniPayOrder } = require('./routes/webhook');
-let zinipayCheckRunning = false;
-async function checkPendingZiniPay() {
-  if (zinipayCheckRunning) return;
-  zinipayCheckRunning = true;
+const { checkOrderPayment } = require('./routes/webhook');
+let paymentCheckRunning = false;
+async function checkPendingPayments() {
+  if (paymentCheckRunning) return;
+  paymentCheckRunning = true;
   try {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const pending = await Order.find({ paymentGateway: 'zinipay', status: 'pending', createdAt: { $gte: since } })
+    const pending = await Order.find({
+      paymentGateway: { $in: ['zinipay', 'cryptomus'] },
+      status: 'pending',
+      gatewayRedirectUrl: { $ne: null },
+      createdAt: { $gte: since },
+    })
       .sort({ createdAt: -1 })
       .limit(50);
     for (const order of pending) {
-      await checkZiniPayOrder(order).catch((err) => console.error(`[ZiniPay poll] ${order.orderId}:`, err.message));
+      await checkOrderPayment(order).catch((err) => console.error(`[Payment poll] ${order.orderId}:`, err.message));
     }
   } catch (err) {
-    console.error('[ZiniPay poll]', err.message);
+    console.error('[Payment poll]', err.message);
   } finally {
-    zinipayCheckRunning = false;
+    paymentCheckRunning = false;
   }
 }
-setInterval(checkPendingZiniPay, 60 * 1000).unref();
+setInterval(checkPendingPayments, 60 * 1000).unref();
 
 module.exports = app;

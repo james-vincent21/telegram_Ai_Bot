@@ -165,7 +165,11 @@ Open `http://localhost:3000` and log in with:
 
 ---
 
-## 📡 Payment & Delivery (ZiniPay, or SSLCommerz)
+## 📡 Payment & Delivery (ZiniPay, Cryptomus, or SSLCommerz)
+
+After **Confirm Order** the customer picks a payment method (bKash / Nagad via ZiniPay in ৳, or crypto via
+Cryptomus in $ at ipdokan.com's USD price). The invoice is created only for the chosen method, and the order is
+then locked to it, so it can't be paid twice.
 
 **ZiniPay** (used when `ZINIPAY_API_KEY` is set):
 1. Copy the Brand Key from ZiniPay → Brands into `ZINIPAY_API_KEY`.
@@ -177,7 +181,12 @@ Open `http://localhost:3000` and log in with:
    only when the invoice is `COMPLETED` for the full amount. Pending ZiniPay orders from the last 24h are also
    re-checked every minute, so a missed webhook still gets delivered.
 
-**SSLCommerz** (fallback): set `GATEWAY_STORE_ID`, `GATEWAY_STORE_PASSWORD`, `GATEWAY_SANDBOX`; the IPN is
+**Cryptomus** (shown when `CRYPTOMUS_MERCHANT_ID` and `CRYPTOMUS_PAYMENT_KEY` are set): requests are signed
+(md5 of base64 JSON + payment key); the webhook `<APP_BASE_URL>/webhook/cryptomus` is signature-checked, and the
+invoice is always re-read from Cryptomus (`paid` / `paid_over`, full USD amount) before delivery. Pending
+Cryptomus orders are re-checked every minute too.
+
+**SSLCommerz** (fallback when ZiniPay isn't set up): set `GATEWAY_STORE_ID`, `GATEWAY_STORE_PASSWORD`, `GATEWAY_SANDBOX`; the IPN is
 `<APP_BASE_URL>/webhook/payment-ipn`.
 
 **Delivery** (both): upload credentials in **Admin → Stock** for each package (choose a location for
