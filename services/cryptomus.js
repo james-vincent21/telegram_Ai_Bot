@@ -79,7 +79,9 @@ async function createInvoice(order) {
     order_id: cryptomusOrderId(order),
     url_return: withOrder(returnBase),
     url_success: withOrder(returnBase),
-    url_callback: `${appBaseUrl}/webhook/cryptomus`,
+    // Cryptomus refuses some callback hosts ("Request contains forbidden input"),
+    // e.g. *.sslip.io, so the callback can be routed through the shop's domain.
+    url_callback: (process.env.CRYPTOMUS_CALLBACK_URL || `${appBaseUrl}/webhook/cryptomus`).trim(),
     lifetime: INVOICE_LIFETIME_SECONDS,
     additional_data: `telegram:${order.telegramId}`,
   });
