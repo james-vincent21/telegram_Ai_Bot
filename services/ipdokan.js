@@ -255,6 +255,28 @@ async function ensureBrandPlan(productId, variantId) {
   return { brand, plan };
 }
 
+let feeCache = { percent: null, at: 0 };
+const FEE_TTL = 10 * 60 * 1000;
+
+/**
+ * Service fee % added to every order, same as ipdokan.com's checkout.
+ * SERVICE_FEE_PERCENT in .env wins; otherwise ipdokan.com's own rate
+ * (GET /api/payments/mode -> serviceFeePercent), cached 10 min; default 5.
+ */
+async function getServiceFeePercent() {
+  const env = process.env.SERVICE_FEE_PERCENT;
+  if (env !== undefined && env !== "" && Number.isFinite(Number(env))) return Math.min(50, Math.max(0, Number(env)));
+  if (feeCache.percent != null && Date.now() - feeCache.at < FEE_TTL) return feeCache.percent;
+  try {
+    const res = await axios.get(`${BASE_URL}/api/payments/mode`, { timeout: 10000 });
+    const p = Number(res.data?.serviceFeePercent);
+    if (Number.isFinite(p) && p >= 0 && p <= 50) feeCache = { percent: p, at: Date.now() };
+  } catch (err) {
+    console.error("[ipdokan] Could not read service fee:", err.message);
+  }
+  return feeCache.percent ?? 5;
+}
+
 function clearProductCache() {
   cache = { products: null, at: 0, pending: null };
 }
@@ -269,6 +291,7 @@ module.exports = {
   syncToStore,
   ensureBrandPlan,
   clearProductCache,
+  getServiceFeePercent,
   categoryId,
   shortId,
 };

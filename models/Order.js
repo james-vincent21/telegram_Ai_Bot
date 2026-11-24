@@ -65,8 +65,14 @@ const orderSchema = new mongoose.Schema(
       default: 1,
       min: 1,
     },
+    // amount = subtotal + serviceFee (what the gateway charges), like ipdokan.com
+    subtotal: { type: Number, default: null },
+    serviceFee: { type: Number, default: 0 },
+    serviceFeePercent: { type: Number, default: 0 },
     // USD prices from ipdokan.com, charged by Cryptomus
     unitPriceUsd: { type: Number, default: null },
+    subtotalUsd: { type: Number, default: null },
+    serviceFeeUsd: { type: Number, default: null },
     amountUsd: { type: Number, default: null },
     unitPrice: {
       type: Number,

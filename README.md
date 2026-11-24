@@ -171,6 +171,10 @@ After **Confirm Order** the customer picks a payment method (bKash / Nagad via Z
 Cryptomus in $ at ipdokan.com's USD price). The invoice is created only for the chosen method, and the order is
 then locked to it, so it can't be paid twice.
 
+**Service fee:** like ipdokan.com's checkout, every order adds a service fee (`fee = round(subtotal × p%)`,
+`total = subtotal + fee`, for both ৳ and $). The rate is read from ipdokan.com (`/api/payments/mode`, 5% today);
+set `SERVICE_FEE_PERCENT` to override it. The quantity screen and the Mini App show subtotal, fee and total.
+
 **ZiniPay** (used when `ZINIPAY_API_KEY` is set):
 1. Copy the Brand Key from ZiniPay → Brands into `ZINIPAY_API_KEY`.
 2. Set `APP_BASE_URL` to the bot server's public https address. Each invoice tells ZiniPay to call

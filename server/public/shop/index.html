@@ -321,7 +321,10 @@
       bar.innerHTML = ""; return;
     }
     const p = state.pkg;
-    const total = p ? p.price * state.qty : 0;
+    const feePct = Number(pr.serviceFeePercent) || 0;
+    const sub = p ? Math.round(p.price * state.qty * 100) / 100 : 0;
+    const fee = Math.round(sub * feePct) / 100;
+    const total = Math.round((sub + fee) * 100) / 100;
     const max = maxQty();
     view.innerHTML = `
       <div class="ph"><div class="thumb">${pr.image ? `<img src="${esc(pr.image)}" alt="" />` : "🌐"}</div>
@@ -344,7 +347,8 @@
       ${ready() ? `
         <div class="section">QUANTITY</div>
         <div class="qty"><button class="minus" id="minus" ${state.qty <= 1 ? "disabled" : ""}>−</button><span class="n">${state.qty}</span><button class="plus" id="plus" ${state.qty >= max ? "disabled" : ""}>+</button></div>
-        <div class="presets">${[1, 5, 10, 25].filter((n) => n <= max).map((n) => `<button data-q="${n}" class="${n === state.qty ? "on" : ""}">×${n}</button>`).join("")}</div>` : ""}`;
+        <div class="presets">${[1, 5, 10, 25].filter((n) => n <= max).map((n) => `<button data-q="${n}" class="${n === state.qty ? "on" : ""}">×${n}</button>`).join("")}</div>
+        ${feePct > 0 ? `<div class="legend" style="justify-content:space-between"><span style="--c:transparent">Subtotal ${money(sub)}</span><span style="--c:transparent">Service fee (${feePct}%) ${money(fee)}</span></div>` : ""}` : ""}`;
 
     bar.innerHTML = `<button class="buy" id="buy" ${!ready() || state.busy ? "disabled" : ""}>
       <span>${state.busy ? "Creating order…" : ready() ? "🛒 Buy now" : p ? "Choose a location" : "Choose a package"}</span><span>${p ? money(total) : ""}</span></button>`;

@@ -146,21 +146,25 @@ module.exports = {
     `Where should your IPs be?\n<i>The number shows how many IPs are available there.</i>`,
   locationSoldOut:
     `😔 <b>Location sold out</b>\n\nThere are no IPs left in this location right now. Please pick another one.`,
-  selectQuantity: (productName, planLabel, unitPrice, quantity, currency) =>
+  selectQuantity: (productName, planLabel, unitPrice, quantity, currency, fee = null) =>
     `🔢 <b>CHOOSE QUANTITY</b>\n<i>${productName}</i>\n\n${steps(4)}\n${LINE}\n\n` +
     `📦 <b>Package:</b> ${planLabel}\n` +
     `💵 <b>Unit price:</b> ${unitPrice} ${currency}\n\n` +
     `<blockquote>🔢 <b>Quantity:</b> ${quantity}\n` +
-    `🧮 ${unitPrice} ${currency} × ${quantity}\n` +
-    `💰 <b>Total: ${formatMoney(unitPrice * quantity)} ${currency}</b></blockquote>\n\n` +
+    `🧮 ${unitPrice} ${currency} × ${quantity}` +
+    (fee && fee.serviceFee > 0
+      ? ` = ${formatMoney(fee.subtotal)} ${currency}\n🧾 Service fee (${fee.percent}%): ${formatMoney(fee.serviceFee)} ${currency}\n` +
+        `💰 <b>Total: ${formatMoney(fee.total)} ${currency}</b></blockquote>\n\n`
+      : `\n💰 <b>Total: ${formatMoney(unitPrice * quantity)} ${currency}</b></blockquote>\n\n`) +
     `<i>Use ➖ / ➕ or a preset, then tap Confirm.</i>`,
 
-  choosePayment: (brandName, planLabel, orderId, quantity = 1) =>
+  choosePayment: (brandName, planLabel, orderId, quantity = 1, feePercent = 0) =>
     `💳 <b>CHOOSE HOW TO PAY</b>\n<i>Your order is ready</i>\n\n${steps(5)}\n${LINE}\n\n` +
     `<blockquote>🏷 <b>Provider:</b> ${brandName}\n` +
     `📦 <b>Package:</b> ${planLabel}` +
     `${quantity > 1 ? `\n🔢 <b>Quantity:</b> ${quantity}` : ""}\n` +
     `🆔 <b>Order ID:</b> <code>${orderId}</code></blockquote>\n\n` +
+    `${feePercent > 0 ? `<i>Prices include the ${feePercent}% service fee.</i>\n\n` : ""}` +
     `Pick a payment method:\n` +
     `💳 <b>bKash / Nagad</b> — pay in Taka\n` +
     `🪙 <b>Crypto</b> — pay in USD with USDT, BTC and more\n\n` +

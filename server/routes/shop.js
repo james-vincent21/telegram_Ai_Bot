@@ -87,7 +87,10 @@ router.get("/catalog", async (req, res) => {
         };
       }),
     );
-    return res.json({ categories: withProducts.filter((c) => c.products.length) });
+    return res.json({
+      categories: withProducts.filter((c) => c.products.length),
+      serviceFeePercent: await catalog.getServiceFeePercent(),
+    });
   } catch (err) {
     console.error("[Shop] catalog:", err.message);
     return res.status(502).json({ error: "Could not load the store. Please try again." });
@@ -126,6 +129,7 @@ router.get("/products/:id", async (req, res) => {
       image: product.images?.[0]?.src || "",
       description: String(product.short_description || "").replace(/<[^>]+>/g, "").trim().slice(0, 400),
       maxQuantity: MAX_QUANTITY,
+      serviceFeePercent: await catalog.getServiceFeePercent(),
       locations: (product.locations || []).map((l) => ({ id: l.id, name: l.name, stock: l.stock, inStock: l.inStock })),
       packages,
     });
@@ -158,7 +162,7 @@ router.post("/orders", async (req, res) => {
     bot.telegram
       .sendMessage(
         req.tgUser.id,
-        strings.choosePayment(order.productName, order.variationName, order.orderId, order.quantity).replace(/%%STEPS:\d%%\n?/, ""),
+        strings.choosePayment(order.productName, order.variationName, order.orderId, order.quantity, order.serviceFeePercent).replace(/%%STEPS:\d%%\n?/, ""),
         { parse_mode: "HTML", ...keyboards.paymentMethodsKeyboard(order, methods) },
       )
       .catch(() => {});

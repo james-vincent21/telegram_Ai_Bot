@@ -9,6 +9,7 @@ const {
   resolveItem,
   maxQuantity,
   packageLabel,
+  withServiceFee,
   createTelegramOrder,
   startPayment,
   availableGateways,
@@ -307,15 +308,17 @@ function registerCustomerHandlers(bot) {
     let max = maxQuantity(item);
     if (location?.stock > 0) max = Math.min(max, location.stock);
     const qty = Math.min(max, Math.max(1, quantity));
+    const feePercent = await catalog.getServiceFeePercent();
+    const fee = { ...withServiceFee(item.price * qty, feePercent), percent: feePercent };
     return animator.edit(
       ctx,
-      strings.selectQuantity(item.product.name, packageLabel(item.name, location), item.price, qty, "BDT"),
+      strings.selectQuantity(item.product.name, packageLabel(item.name, location), item.price, qty, "BDT", fee),
       keyboards.quantityKeyboard(
         item.product.id,
         variationId,
         qty,
         max,
-        `${Math.round(item.price * qty * 100) / 100} BDT`,
+        `${fee.total} BDT`,
         categoryId,
         location?.id || 0,
       ),
@@ -417,7 +420,7 @@ function registerCustomerHandlers(bot) {
       if (methods.length === 1) return await showPaymentLink(ctx, order, methods[0].id);
       return await animator.edit(
         ctx,
-        strings.choosePayment(order.productName, order.variationName, order.orderId, order.quantity),
+        strings.choosePayment(order.productName, order.variationName, order.orderId, order.quantity, order.serviceFeePercent),
         keyboards.paymentMethodsKeyboard(order, methods),
       );
     } catch (err) {

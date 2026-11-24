@@ -39,6 +39,15 @@ function chargeFor(order, gateway) {
 
 const MAX_QUANTITY = 50;
 
+const roundMoney = (v) => Math.round(Number(v) * 100) / 100;
+
+/** Same as ipdokan.com: fee = round(subtotal × p%), total = subtotal + fee. */
+function withServiceFee(subtotal, percent) {
+  const base = roundMoney(subtotal);
+  const serviceFee = roundMoney((base * percent) / 100);
+  return { subtotal: base, serviceFee, total: roundMoney(base + serviceFee) };
+}
+
 /**
  * Resolves product + selected package (variationId 0/null = simple product).
  * variationId may be the full ipdokan id or the short id used in buttons.
@@ -123,8 +132,10 @@ async function createTelegramOrder({ from, productId, variationId, quantity, loc
   const qty = Math.min(maxQuantity(item), Math.max(1, parseInt(quantity, 10) || 1));
   const { product, variation } = item;
   const orderId = newOrderId();
-  const total = Math.round(item.price * qty * 100) / 100;
-  const totalUsd = item.priceUsd > 0 ? Math.round(item.priceUsd * qty * 100) / 100 : null;
+  const feePercent = await catalog.getServiceFeePercent();
+  const bdt = withServiceFee(item.price * qty, feePercent);
+  const usd = item.priceUsd > 0 ? withServiceFee(item.priceUsd * qty, feePercent) : null;
+  const total = bdt.total;
   const { brand, plan } = await catalog.ensureBrandPlan(product.id, variation?.id);
 
   const order = await Order.create({
@@ -143,13 +154,18 @@ async function createTelegramOrder({ from, productId, variationId, quantity, loc
     telegramFirstName: from.first_name || "",
     quantity: qty,
     unitPrice: item.price,
-    amount: total,
+    subtotal: bdt.subtotal,
+    serviceFee: bdt.serviceFee,
+    serviceFeePercent: feePercent,
+    amount: bdt.total,
     unitPriceUsd: item.priceUsd,
-    amountUsd: totalUsd,
+    subtotalUsd: usd?.subtotal ?? null,
+    serviceFeeUsd: usd?.serviceFee ?? null,
+    amountUsd: usd?.total ?? null,
     currency: "BDT",
     status: "pending",
   });
-  console.log(`[Order ${source}] Created ${orderId}: ${product.name} / ${order.variationName} ×${qty} = ${total} BDT`);
+  console.log(`[Order ${source}] Created ${orderId}: ${product.name} / ${order.variationName} ×${qty} = ${bdt.subtotal} + ${bdt.serviceFee} fee = ${total} BDT`);
 
   return { order, item, location, total };
 }
@@ -226,6 +242,7 @@ module.exports = {
   resolveItem,
   maxQuantity,
   packageLabel,
+  withServiceFee,
   availableGateways,
   chargeFor,
   createTelegramOrder,
