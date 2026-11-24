@@ -29,8 +29,19 @@ async function call(path, body) {
     });
     return res.data;
   } catch (err) {
-    const detail = err.response?.data?.message || err.response?.data?.error || err.message;
+    const data = err.response?.data;
+    // e.g. {"message":"Invalid request data","errors":[{"field":"body.cus_email","message":"Required"}]}
+    const fields = Array.isArray(data?.errors) ? data.errors.map((e) => `${e.field}: ${e.message}`).join("; ") : "";
+    const detail = [data?.message || data?.error || err.message, fields].filter(Boolean).join(" — ");
     throw new Error(`ZiniPay ${path} failed: ${detail}`);
+  }
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
   }
 }
 
@@ -50,8 +61,9 @@ function invoiceIdFromUrl(paymentUrl) {
 async function createInvoice(order, customer = {}) {
   const appBaseUrl = (process.env.APP_BASE_URL || "http://localhost:5001").replace(/\/$/, "");
   const orderParam = `order_id=${encodeURIComponent(order.orderId)}`;
-  // ZiniPay requires redirect_url to be on the brand's website domain.
-  // ZINIPAY_REDIRECT_URL lets the brand's own site be used (e.g. https://ipdokan.com/).
+  // ZiniPay requires redirect_url / cancel_url on the brand's website domain
+  // (the "Website URL" of the brand in the ZiniPay dashboard), else it answers
+  // "Domain mismatch". ZINIPAY_REDIRECT_URL points them at that site.
   const redirectBase = (process.env.ZINIPAY_REDIRECT_URL || `${appBaseUrl}/payment/success`).trim();
   const cancelBase = (process.env.ZINIPAY_CANCEL_URL || `${appBaseUrl}/payment/cancel`).trim();
   const withOrder = (u) => `${u}${u.includes("?") ? "&" : "?"}${orderParam}`;
@@ -59,7 +71,8 @@ async function createInvoice(order, customer = {}) {
   const data = await call("/v1/payment/create", {
     amount: Number(order.amount),
     cus_name: customer.name || order.telegramFirstName || order.telegramUsername || `User ${order.telegramId}`,
-    ...(customer.email ? { cus_email: customer.email } : {}),
+    // Required by ZiniPay (docs say optional). Telegram has no email, so use a placeholder on the brand domain.
+    cus_email: customer.email || `tg${order.telegramId}@${hostOf(redirectBase) || "ipdokan.com"}`,
     metadata: { order_id: order.orderId, telegram_id: String(order.telegramId) },
     redirect_url: withOrder(redirectBase),
     cancel_url: withOrder(cancelBase),
