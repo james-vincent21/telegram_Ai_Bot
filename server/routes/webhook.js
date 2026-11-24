@@ -678,15 +678,24 @@ router.all(["/payment/success", "/tg-bot/paid"], async (req, res) => {
   }
   const bot = await botLink();
   const s = order?.status;
-  const view =
-    s === "delivered"
-      ? { statusText: "Payment received ✅", subText: "Your proxy has been sent to your Telegram chat." }
-      : ["paid", "stock_pending", "processing", "completed"].includes(s)
-        ? { statusText: "Payment received ✅", subText: "We're preparing your proxy — it will arrive in your Telegram chat shortly." }
-        : s === "pending"
-          ? { statusText: "Confirming your payment…", subText: "This usually takes a few seconds. Your proxy will appear in your Telegram chat as soon as it's confirmed.", refresh: true }
-          : { statusText: "Payment Received Successfully!", subText: "Your proxy will be delivered to your Telegram chat." };
-  res.send(renderReturnPage({ title: "Payment", isSuccess: s !== "pending", orderId, botUrl: bot, ...view }));
+  const paid = ["delivered", "paid", "stock_pending", "processing", "completed"].includes(s);
+  let view;
+  if (s === "delivered") {
+    view = { statusText: "Payment received ✅", subText: "Your proxy has been sent to your Telegram chat." };
+  } else if (paid) {
+    view = { statusText: "Payment received ✅", subText: "We're preparing your proxy — it will arrive in your Telegram chat shortly." };
+  } else if (s === "pending" && order.paymentGateway) {
+    // Invoice still open: the gateway may need a few seconds to confirm
+    view = { statusText: "Confirming your payment…", subText: "This usually takes a few seconds. Your proxy will appear in your Telegram chat as soon as it's confirmed.", refresh: true };
+  } else if (s === "pending") {
+    // The invoice was cancelled / expired without payment
+    view = { statusText: "Payment not completed", subText: "No money was taken. You can pay again whenever you're ready.", retryUrl: orderService.payLink(order.orderId) };
+  } else if (order) {
+    view = { statusText: "This order is closed", subText: "It was cancelled or could not be completed. Please place a new order in the Telegram bot." };
+  } else {
+    view = { statusText: "Order not found", subText: "Please open your order from the Telegram bot." };
+  }
+  res.send(renderReturnPage({ title: "Payment", isSuccess: paid || Boolean(view.refresh), orderId, botUrl: bot, ...view }));
 });
 
 router.all("/payment/fail", (req, res) => {
