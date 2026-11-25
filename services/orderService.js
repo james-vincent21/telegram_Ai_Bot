@@ -320,7 +320,7 @@ async function createGatewayInvoice(order, gateway, opts = {}) {
     { _id: order._id },
     { $set: { gatewayRedirectUrl: order.gatewayRedirectUrl, gatewayTransactionId: order.gatewayTransactionId } },
   );
-  if (order.siteOrderId) site.started(order.siteOrderId, gateway === "cryptomus" ? 120 : 0).catch(() => {});
+  if (order.siteOrderId) site.started(order.siteOrderId, gateway === "cryptomus" ? 120 : 0, gateway).catch(() => {});
   console.log(`[Payment] ${gateway} invoice for ${order.orderId}: ${charge.amount} ${charge.currency}`);
   return { order, paymentUrl: session.redirectUrl, ...charge };
 }

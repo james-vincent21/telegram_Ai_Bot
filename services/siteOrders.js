@@ -3,6 +3,7 @@
  * website), so bot sales use the website's own inventory:
  *   create  -> website order; codes are reserved (or a supplier plan is ordered)
  *   paid    -> codes are marked sold and returned for delivery in Telegram
+ *   failed  -> payment failed / cancelled at the gateway: admins see "Payment failed", codes go back
  *   cancel  -> reservation released, codes go back to stock
  *
  * Runs on the same server: SITE_API_URL defaults to http://127.0.0.1:4000/api/bot
@@ -54,14 +55,23 @@ async function create({ telegramId, name, productId, variantId, locationId, quan
   return r.ok ? { ok: true, order: r.data.order } : r;
 }
 
-async function started(siteOrderId, holdMinutes = 0) {
-  return call("post", `/orders/${siteOrderId}/started`, { holdMinutes });
+/** The customer was sent to the payment page; `method` ("zinipay" | "cryptomus") is shown to admins. */
+async function started(siteOrderId, holdMinutes = 0, method = "") {
+  return call("post", `/orders/${siteOrderId}/started`, { holdMinutes, method });
 }
 
 /** @returns {Promise<{ok, order?: {status, deliveredCodes: string[], supplierDeliveryPending, supplierError}, error?: string}>} */
-async function paid(siteOrderId, method, reference) {
-  const r = await call("post", `/orders/${siteOrderId}/paid`, { method, reference });
+async function paid(siteOrderId, method, reference, channel = "") {
+  const r = await call("post", `/orders/${siteOrderId}/paid`, { method, reference, channel });
   return r.ok ? { ok: true, order: r.data.order, error: r.data.error || "" } : r;
+}
+
+/**
+ * The payment failed or was cancelled / expired at the gateway: the website order is cancelled with
+ * `reason` (admins see "Payment failed") and its reserved codes go back to stock.
+ */
+async function failed(siteOrderId, method, reason, channel = "") {
+  return call("post", `/orders/${siteOrderId}/failed`, { method, reason, channel });
 }
 
 async function cancel(siteOrderId) {
@@ -78,4 +88,4 @@ function isSiteProduct(productId) {
   return /^[a-f0-9]{24}$/i.test(String(productId || ""));
 }
 
-module.exports = { isConfigured, isSiteProduct, create, started, paid, cancel, get };
+module.exports = { isConfigured, isSiteProduct, create, started, paid, failed, cancel, get };

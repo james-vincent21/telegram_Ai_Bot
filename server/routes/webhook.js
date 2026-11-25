@@ -269,15 +269,37 @@ router.post("/webhook/woocommerce", async (req, res) => {
  *   gateway data; `expected` is the amount due in the gateway's currency (default: order.amount)
  * @returns {Promise<"DELIVERED"|"STOCK_PENDING"|"ALREADY_PROCESSED"|"AMOUNT_MISMATCH">}
  */
+/** bKash / Nagad / … from a ZiniPay verify response (empty for other gateways). */
+function paymentChannel(raw) {
+  return String(raw?.payment_method || raw?.paymentMethod || "").toLowerCase();
+}
+
+/**
+ * Tells ipdokan.com that this order's payment failed, so its admin panel shows
+ * "Payment failed" with the method and reason, and the reserved codes go back
+ * to stock. The bot order forgets the website order (a retry makes a new one).
+ */
+async function reportSiteFailure(order, reason, raw) {
+  if (!order.siteOrderId) return;
+  const r = await site.failed(order.siteOrderId, order.paymentGateway, reason, paymentChannel(raw)).catch((e) => ({ ok: false, error: e.message }));
+  if (!r.ok && r.status !== 409) {
+    // Bridge unreachable: at least give the codes back
+    await site.cancel(order.siteOrderId).catch(() => {});
+  }
+  await Order.updateOne({ _id: order._id, siteOrderId: order.siteOrderId }, { $set: { siteOrderId: null, siteCurrency: "" } });
+  console.log(`↩️ [Site] ${order.orderId}: website order ${order.siteOrderId} marked failed (${reason}) — stock returned`);
+}
+
 async function fulfillPaidOrder(order, { amount, expected, raw, source }) {
   const due = Number(expected ?? order.amount);
   // The gateway must have collected the full order amount
   if (amount != null && !Number.isNaN(amount) && amount + 0.01 < due) {
     console.error(`❌ [${source}] Amount mismatch for ${order.orderId}: paid ${amount}, expected ${due}`);
-    await Order.updateOne(
+    const res = await Order.updateOne(
       { _id: order._id, status: "pending" },
       { $set: { status: "failed", gatewayResponse: raw || null } },
     );
+    if (res.modifiedCount) await reportSiteFailure(order, `${source}: paid ${amount}, expected ${due}`, raw);
     return "AMOUNT_MISMATCH";
   }
 
@@ -305,9 +327,12 @@ async function fulfillPaidOrder(order, { amount, expected, raw, source }) {
   let codes = [];
   let claimedItems = [];
   if (order.siteOrderId) {
-    const r = await site.paid(order.siteOrderId, order.paymentGateway, order.gatewayTransactionId);
+    const r = await site.paid(order.siteOrderId, order.paymentGateway, order.gatewayTransactionId, paymentChannel(raw));
     codes = r.order?.deliveredCodes || [];
     if (!codes.length) console.warn(`⚠️ [${source}] ${order.orderId}: website order ${order.siteOrderId} has no codes yet (${r.order?.supplierDeliveryPending ? "supplier pending" : r.error || r.order?.status || "unknown"})`);
+  } else if (site.isConfigured() && site.isSiteProduct(order.wooProductId)) {
+    // Its website order was released (payment had failed first): deliverWaitingOrder places a new one
+    console.warn(`⚠️ [${source}] ${order.orderId}: paid without a website order — placing a new one`);
   } else {
     claimedItems = await stockService.assignStockToOrder(order);
     codes = claimedItems.map((c) => c.credentials);
@@ -369,7 +394,7 @@ async function checkZiniPayOrder(order) {
   }
   if (result.status === "FAILED") {
     // Cancelled / failed invoice: keep the order, let the customer pay again
-    await releaseInvoice(order, result.raw, "ZiniPay");
+    await releaseInvoice(order, result.raw, "ZiniPay", `ZiniPay: ${String(result.raw?.status || "failed").toLowerCase()}`);
   }
   return result.status || "UNKNOWN";
 }
@@ -380,7 +405,7 @@ async function checkZiniPayOrder(order) {
  * tap creates a fresh one. Matches on the invoice id so a newer invoice is
  * never touched.
  */
-async function releaseInvoice(order, raw, source) {
+async function releaseInvoice(order, raw, source, reason = `${source}: payment not completed`) {
   const res = await Order.updateOne(
     { _id: order._id, status: "pending", gatewayTransactionId: order.gatewayTransactionId },
     {
@@ -395,8 +420,8 @@ async function releaseInvoice(order, raw, source) {
     },
   );
   if (res.modifiedCount) {
-    // Give the reserved codes back to the website's stock
-    if (order.siteOrderId) await site.cancel(order.siteOrderId).catch(() => {});
+    // Website admin sees "Payment failed"; the reserved codes go back to its stock
+    await reportSiteFailure(order, reason, raw);
     console.log(`↩️ [${source}] Invoice for ${order.orderId} was cancelled/expired — order can be paid again`);
   }
 }
@@ -411,7 +436,13 @@ async function deliverWaitingOrder(order) {
   let r;
   if (order.siteOrderId) {
     r = await site.get(order.siteOrderId);
-  } else {
+    if (r.ok && r.order?.status === "cancelled") {
+      // e.g. it was marked "payment failed" before the money arrived: place a fresh one
+      await Order.updateOne({ _id: order._id, siteOrderId: order.siteOrderId }, { $set: { siteOrderId: null, siteCurrency: "" } });
+      order.siteOrderId = null;
+    }
+  }
+  if (!order.siteOrderId) {
     // Paid before the website link: place the website order now (at most every 10 min)
     if (order.siteAttemptAt && Date.now() - order.siteAttemptAt.getTime() < 10 * 60 * 1000) return "WAIT";
     await Order.updateOne({ _id: order._id }, { $set: { siteAttemptAt: new Date() } });
@@ -488,13 +519,14 @@ async function checkCryptomusOrder(order) {
     return fulfillPaidOrder(order, { amount: inv.amount, expected: order.amountUsd, raw: inv.raw, source: "Cryptomus" });
   }
   if (inv.failed) {
-    await releaseInvoice(order, inv.raw, "Cryptomus");
+    await releaseInvoice(order, inv.raw, "Cryptomus", `Cryptomus: ${inv.status.replace(/_/g, " ")}`);
   } else if (inv.needsReview) {
     console.error(`⚠️ [Cryptomus] ${order.orderId}: invoice is "${inv.status}" (wrong amount paid) — review in Cryptomus and deliver or refund manually.`);
-    await Order.updateOne(
+    const res = await Order.updateOne(
       { _id: order._id, status: "pending" },
       { $set: { status: "failed", gatewayResponse: inv.raw } },
     );
+    if (res.modifiedCount) await reportSiteFailure(order, `Cryptomus: ${inv.status.replace(/_/g, " ")} (${inv.amount} ${inv.currency} paid)`, inv.raw);
   }
   return inv.status || "UNKNOWN";
 }
